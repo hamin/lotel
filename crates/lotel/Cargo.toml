@@ -1,0 +1,16 @@
+[package]
+name = "lotel"
+version = "0.1.0"
+edition = "2024"
+description = "Local OpenTelemetry backend: OTLP ingest, capped DuckDB storage, Topcoat UI"
+license = "MIT"
+
+[dependencies]
+topcoat = { version = "0.12", features = ["tailwind"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# Exact pin: the crate tracks DuckDB releases (1.10506.x = DuckDB 1.5.6); the
+# bundled extension is built against 1.5.6 and the ABI must match.
+duckdb = { version = "=1.10506.1", features = ["bundled", "parquet", "json", "r2d2", "chrono"] }
+anyhow = "1"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
