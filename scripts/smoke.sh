@@ -104,6 +104,33 @@ d = json.loads(body)
 assert d.get("xs"), f"empty series: {body[:120]}"
 print("PASS  metric series  points:", len(d["xs"]))
 
+# Explore: query builder, chart endpoint, attribute filters, SQL console.
+import urllib.parse as U
+def q(**k): return "?" + U.urlencode(k)
+
+b = wait_for("query builder", "/query" + q(dataset="logs", range="all",
+                measures='["count"]', group='["service_name"]'), "by <b>service_name")
+assert "checkout" in b, "breakdown value missing"
+
+_, cbody = get("/api/query/chart" + q(dataset="logs", range="all",
+                measures='["count"]', group='["service_name"]'))
+cd = json.loads(cbody)
+assert cd.get("stacked") and cd.get("series"), f"chart: {cbody[:120]}"
+print("PASS  query chart  series:", len(cd["series"]))
+
+_, ab = get("/query" + q(dataset="logs", range="all",
+                filters='[{"col":"@log_attributes:code","op":"=","val":"ETIMEDOUT"}]'))
+assert "json_extract_string" in ab and "Query error" not in ab, ab[:200]
+print("PASS  query attribute filter")
+
+_, sb = get("/query" + q(mode="sql", sql="SELECT count(*) AS n FROM otel.main.otlp_logs"))
+assert "<th>n</th>" in sb, sb[:200]
+print("PASS  sql console")
+
+_, gb = get("/query" + q(mode="sql", sql="DELETE FROM otel.main.otlp_logs"))
+assert "got 'delete'" in gb, gb[:200]
+print("PASS  sql read-only guard")
+
 # Server-rendered distributions for the two histogram shapes.
 HG = "/metrics?shape=histogram&name=http.request.duration&service=api-gateway&chart=1"
 wait_for("histogram catalog", "/metrics", "http.request.duration")

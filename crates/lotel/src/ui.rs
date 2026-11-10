@@ -120,15 +120,73 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
         background: linear-gradient(90deg, #3f7d63, #7dd3a0); border-radius: 3px; }
 .hcount { position: absolute; top: 0; line-height: 1.05rem; padding-left: 0.35rem;
           color: #d7dce5; font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+/* — explore: query builder + results — */
+.qtabs { display: flex; gap: 0.25rem; margin-bottom: 1rem; border-bottom: 1px solid #1b212e; }
+.qtabs .tab { padding: 0.45rem 0.9rem; color: #8a93a5; text-decoration: none; font-size: 0.85rem;
+              border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.qtabs .tab:hover { color: #d7dce5; }
+.qtabs .tab.on { color: #eaf0fa; border-bottom-color: #7dd3a0; }
+.qb { background: #0e1420; border: 1px solid #1b212e; border-radius: 10px; padding: 0.9rem 1rem;
+      margin-bottom: 1rem; }
+.qrow { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.7rem; }
+.qfield { display: flex; flex-direction: column; gap: 0.22rem; }
+.qcap { font-size: 0.68rem; color: #7d8595; text-transform: uppercase; letter-spacing: 0.08em; }
+.qb select, .qb input { background: #11151f; color: #d7dce5; border: 1px solid #232b3b;
+      border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.83rem; }
+.qb select:focus, .qb input:focus { outline: 1px solid #3d68a8; }
+.qsec { margin: 0.7rem 0; }
+.qlab { display: block; font-size: 0.68rem; color: #7d8595; text-transform: uppercase;
+        letter-spacing: 0.08em; margin-bottom: 0.35rem; }
+.qtoken { display: inline-flex; gap: 0.3rem; align-items: center; margin: 0 0.35rem 0.35rem 0;
+          background: #141a26; border: 1px solid #232b3b; border-radius: 7px; padding: 0.22rem 0.3rem; }
+.qtoken .qcol, .qtoken .qop, .qtoken .qfn, .qtoken .qval, .qtoken .qkey {
+          background: #0e1420; border: 1px solid #26304400; border-radius: 5px; padding: 0.25rem 0.4rem; }
+.qtoken .qval { min-width: 7rem; }
+.qtoken .qkey { min-width: 7rem; }
+.qtoken .qcol { color: #9ecbff; }
+.qdel { background: none; border: 0; color: #6b7484; cursor: pointer; font-size: 1rem; line-height: 1;
+        padding: 0 0.2rem; }
+.qdel:hover { color: #f0858a; }
+.qadd { background: none; border: 1px dashed #2b3548; color: #8a93a5; border-radius: 6px;
+        padding: 0.28rem 0.7rem; font-size: 0.78rem; cursor: pointer; }
+.qadd:hover { color: #d7dce5; border-color: #3d68a8; }
+.qrun { background: #1c6b46; color: #eafbf1; border: 1px solid #25915e; border-radius: 7px;
+        padding: 0.5rem 1.4rem; font-size: 0.88rem; font-weight: 600; cursor: pointer; margin-top: 0.3rem; }
+.qrun:hover { background: #22855a; }
+.qstats { display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline; margin: 0.2rem 0 0.7rem;
+          font-size: 0.82rem; color: #8a93a5; }
+.qstats .qs b { color: #d7dce5; font-variant-numeric: tabular-nums; }
+.qchart { min-height: 20px; }
+.qtablewrap { overflow-x: auto; border: 1px solid #1b212e; border-radius: 8px; }
+.qtable { margin: 0; }
+.qtable thead th { position: sticky; top: 0; background: #11151f; z-index: 1; }
+.qtable td { max-width: 32rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qempty { padding: 1rem 1.1rem; margin: 0; }
+.qerr { background: #241014; border: 1px solid #4a1e24; border-radius: 8px; padding: 0.7rem 0.9rem;
+        margin-bottom: 1rem; color: #f0858a; }
+.qerr pre { background: none; border: 0; padding: 0.2rem 0 0; margin: 0.3rem 0 0; color: #f4a7ab;
+            white-space: pre-wrap; }
+.sqlform { margin-bottom: 1rem; }
+.sqlbox { width: 100%; background: #0b0f18; color: #cfe0ff; border: 1px solid #232b3b;
+          border-radius: 8px; padding: 0.7rem 0.9rem; font-family: ui-monospace, Menlo, monospace;
+          font-size: 0.82rem; resize: vertical; }
+.sqlbox:focus { outline: 1px solid #3d68a8; }
+.sqlbar { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.5rem; }
+.sqlbar button { background: #1c6b46; color: #eafbf1; border: 1px solid #25915e; border-radius: 7px;
+          padding: 0.42rem 1.2rem; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+.sqlbar button:hover { background: #22855a; }
+.qsql { margin-top: 0.9rem; }
+.qsql summary { cursor: pointer; color: #8a93a5; font-size: 0.8rem; }
 "#;
 
 /// Sidebar nav: (label, path).
-pub(crate) fn nav_links() -> [(&'static str, &'static str); 5] {
+pub(crate) fn nav_links() -> [(&'static str, &'static str); 6] {
     [
         ("Dashboard", "/"),
         ("Logs", "/logs"),
         ("Traces", "/traces"),
         ("Metrics", "/metrics"),
+        ("Explore", "/query"),
         ("Storage", "/storage"),
     ]
 }

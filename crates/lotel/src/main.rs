@@ -4,6 +4,7 @@ mod db;
 mod ingest;
 mod logs;
 mod metrics;
+mod query;
 mod storage;
 mod traces;
 mod ui;
@@ -38,6 +39,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
         "/logs" => "Logs",
         "/traces" => "Traces",
         "/metrics" => "Metrics",
+        "/query" => "Explore",
         "/storage" => "Storage",
         _ => "",
     };
