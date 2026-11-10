@@ -36,3 +36,8 @@ lint:
 smoke: fetch-extensions
     cargo build
     ./scripts/smoke.sh
+
+# Multi-tenant proof: two tenants, one process — isolation, per-tenant tokens
+# and TTLs, same-catalog guard. Needs the real capped + otlp extensions.
+tenant-proof:
+    ./scripts/tenant-proof.sh

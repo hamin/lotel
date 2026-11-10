@@ -93,15 +93,40 @@ cargo test              # unit tests (pure logic; no extensions needed)
 extension installed for the pinned DuckDB version. Both are then
 `include_bytes!`-embedded, so the shipped binary needs nothing at runtime.
 
+## Multi-tenancy (hosted flavor)
+
+The `otlp` extension keys each server by its write target (`IngestTargetKey`
+= catalog + schema) and enforces **one server per target**, with its own token
+and listen URI. That maps cleanly onto multi-tenancy without a custom
+receiver: **one tenant = one attached capped catalog + one `otlp_serve`
+instance**, and isolation is free.
+
+`scripts/tenant-proof.sh` proves this against the real extensions: two
+tenants in one process, each landing rows only in its own catalog, one
+tenant's token rejected (401) at the other's endpoint, and per-tenant TTLs
+(1 day vs 30 days) honored — plus the extension refusing a second server on a
+taken catalog.
+
+The hosted control plane then just needs to: mint a tenant (attach a capped
+catalog + start a serve with a fresh token/port), and route each tenant's
+token to its listener's port (a reverse proxy on OTLP/HTTP, or per-tenant
+endpoints). DuckDB is single-writer, so at high tenant counts you shard
+tenants across processes rather than running thousands of listeners in one.
+
 ## Status & roadmap
 
 Done: OTLP ingest → capped store, dashboard, logs explorer with live tail,
 trace waterfall, metric charts, storage view.
 
-Next: histogram/exp-histogram charts, a Rust OTLP receiver replacing the
-extension-based ingest (crash-durable, backpressured), multi-tenant
-control plane for the hosted flavor, `install.sh` + Docker images with
-per-platform extension bundles.
+Next: histogram/exp-histogram charts, multi-tenant control plane (attach +
+serve per tenant, Postgres registry, token→port routing) building on
+`scripts/tenant-proof.sh`, `install.sh` + Docker images with per-platform
+extension bundles.
+
+Later / optional: a native Rust OTLP receiver only if a tenant needs
+cross-catalog transactions or the extension dependency becomes a liability —
+the extension-based ingest already handles the multi-tenant case, so this is
+no longer on the critical path.
 
 ## License
 
