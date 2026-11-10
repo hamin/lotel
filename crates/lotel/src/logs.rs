@@ -6,10 +6,13 @@ use topcoat::{
     Result,
     context::{Cx, context},
     router::{page, parse_query_params},
-    view::{Unescaped, View, component, view},
+    view::{View, component, view},
 };
 
-use crate::{db::Db, ui::sev_class};
+use crate::{
+    db::Db,
+    ui::{live_refresh, sev_class},
+};
 
 /// Query-string filters (`?q=&service=&severity=&range=&limit=`).
 #[derive(Debug, Default, Deserialize)]
@@ -196,33 +199,6 @@ async fn logs(cx: &Cx) -> Result<impl View> {
             </tbody>
         </table>
 
-        <script>(Unescaped::new_unchecked(TAIL_JS))</script>
+        live_refresh(topic: "logs".to_string(), target: "logrows".to_string(), toggle: "tail-toggle".to_string(), cadence: 3000)
     })
 }
-
-/// Polls the fragment endpoint and swaps the table body in place, so the
-/// tail updates without a navigation.
-const TAIL_JS: &str = r#"
-(function () {
-    var box = document.getElementById('logrows');
-    var ctl = document.getElementById('tail-toggle');
-    if (!box) return;
-    var timer = null;
-    function tick() {
-        fetch('/api/logs' + window.location.search)
-            .then(function (r) { return r.text(); })
-            .then(function (html) { box.innerHTML = html; })
-            .catch(function () {});
-    }
-    function sync() {
-        if (ctl && ctl.checked) {
-            if (!timer) timer = setInterval(tick, 3000);
-        } else if (timer) {
-            clearInterval(timer);
-            timer = null;
-        }
-    }
-    if (ctl) ctl.addEventListener('change', sync);
-    sync();
-})();
-"#;

@@ -15,13 +15,14 @@ use topcoat::{
 
 use crate::{
     db::Db,
+    logs::{LogFilters, fetch as fetch_logs, log_rows},
     services::{build_live, sm_map},
     stats::{build_err, err_card},
 };
 
 #[derive(Debug, Default, Deserialize)]
 struct LiveQuery {
-    /// Which live region to render: `map` | `err`.
+    /// Which live region to render: `logs` | `map` | `err`.
     #[serde(default)]
     topic: String,
     #[serde(default)]
@@ -33,6 +34,11 @@ async fn live(cx: &Cx) -> Result<BoxView<'_>> {
     let db = context::<Db>(cx);
     let q = parse_query_params::<LiveQuery>(cx).unwrap_or_default();
     match q.topic.as_str() {
+        "logs" => {
+            let f = parse_query_params::<LogFilters>(cx).unwrap_or_default();
+            let rows = fetch_logs(db, &f).unwrap_or_default();
+            Ok(view! { log_rows(rows: rows) }.boxed())
+        }
         "map" => {
             let range = if q.range.is_empty() { "1h" } else { q.range.as_str() };
             let input = build_live(db, range);

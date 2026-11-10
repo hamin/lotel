@@ -210,6 +210,16 @@ assert "<!DOCTYPE" not in lerr, "live err topic must render bare"
 assert 'class="card errcard"' in lerr, "live err topic missing card"
 print("PASS  /api/live?topic=err (bare fragment)")
 
+_, llogs = get("/api/live?topic=logs&range=all")
+assert "<!DOCTYPE" not in llogs, "live logs topic must render bare"
+assert "<tr>" in llogs and "cache miss ratio" in llogs, "live logs topic missing rows"
+print("PASS  /api/live?topic=logs (bare fragment)")
+
+_, lpage = get("/logs")
+assert "LotelLive.sub" in lpage and 'id="logrows"' in lpage and "/api/live?topic=" in lpage, "logs live tail wiring missing"
+assert "TAIL_JS" not in lpage, "old TAIL_JS still present"
+print("PASS  logs live tail folded into LotelLive")
+
 check("storage ttl",    "/storage", "7d")
 check("storage segs",   "/storage", "Segments")
 
