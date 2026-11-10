@@ -55,6 +55,8 @@ pub struct Dataset {
     pub table: &'static str,
     pub time: &'static str,
     pub cols: &'static [ColDef],
+    /// Column keys shown, in order, as columns in the raw-events table.
+    pub display: &'static [&'static str],
 }
 
 /// Text columns shared by every signal for quick filtering/grouping.
@@ -107,10 +109,11 @@ pub const DATASETS: &[Dataset] = &[
             ),
             a("scope_attributes", "Scope attribute", "scope_attributes"),
         ],
+        display: &["service_name", "severity_text", "body", "trace_id"],
     },
     Dataset {
         id: "traces",
-        label: "Spans",
+        label: "Traces",
         signal: "traces",
         table: "otlp_traces",
         time: "start_time_unix_nano",
@@ -140,6 +143,7 @@ pub const DATASETS: &[Dataset] = &[
             ),
             a("scope_attributes", "Scope attribute", "scope_attributes"),
         ],
+        display: &["service_name", "name", "duration_ms", "kind", "trace_id"],
     },
     Dataset {
         id: "gauge",
@@ -165,6 +169,7 @@ pub const DATASETS: &[Dataset] = &[
                 "resource_attributes",
             ),
         ],
+        display: &["name", "service_name", "value", "unit"],
     },
     Dataset {
         id: "sum",
@@ -190,6 +195,7 @@ pub const DATASETS: &[Dataset] = &[
                 "resource_attributes",
             ),
         ],
+        display: &["name", "service_name", "value", "unit"],
     },
     Dataset {
         id: "histogram",
@@ -213,6 +219,7 @@ pub const DATASETS: &[Dataset] = &[
                 "resource_attributes",
             ),
         ],
+        display: &["name", "service_name", "count", "sum", "mean"],
     },
     Dataset {
         id: "exp_histogram",
@@ -235,6 +242,7 @@ pub const DATASETS: &[Dataset] = &[
                 "resource_attributes",
             ),
         ],
+        display: &["name", "service_name", "count", "sum", "zero_count"],
     },
 ];
 
@@ -303,6 +311,8 @@ pub struct QueryState {
     pub limit: Option<usize>,
     #[serde(default)]
     pub sql: String,
+    #[serde(default)]
+    pub tab: String, // series | breakdown | events (empty = auto)
 }
 
 fn from_json<T: serde::de::DeserializeOwned>(s: &str) -> Vec<T> {
@@ -484,6 +494,8 @@ pub struct Plan {
     pub group_keys: Vec<String>,
     pub display: String,
     pub stacked: bool,
+    /// "sql" | "events" | "series" | "breakdown" — drives how the page renders.
+    pub mode: &'static str,
 }
 
 fn inline(sql: &str, params: &[String]) -> String {
@@ -683,6 +695,7 @@ pub fn compile(state: &QueryState) -> Plan {
         group_keys,
         display,
         stacked,
+        mode: if grouped { "breakdown" } else { "series" },
     }
 }
 
@@ -699,6 +712,7 @@ fn fail(msg: &str) -> Plan {
         group_keys: vec![],
         display: String::new(),
         stacked: false,
+        mode: "series",
     }
 }
 
@@ -776,6 +790,51 @@ pub fn compile_sql(state: &QueryState) -> Plan {
         group_keys: vec![],
         display: state.sql.trim().to_string(),
         stacked: false,
+        mode: "sql",
+    }
+}
+
+/// Compile the raw-events table: the actual matching rows (log lines, spans,
+/// datapoints), newest first. This is the drill-through target — the rows
+/// behind every aggregate.
+pub fn compile_events(state: &QueryState) -> Plan {
+    let ds = match dataset(&state.dataset) {
+        Some(d) => d,
+        None => return fail("unknown dataset"),
+    };
+    let (where_sql, params) = match build_where(ds, state) {
+        Ok(v) => v,
+        Err(e) => return fail(&e),
+    };
+    let from = format!(" FROM otel.main.\"{}\"", ds.table);
+    let mut sel: Vec<String> = vec![format!("CAST({} AS VARCHAR) AS _t", ds.time)];
+    for k in ds.display {
+        match resolve_col(ds, k) {
+            Some(r) => sel.push(format!("{} AS \"{}\"", r.expr, k)),
+            None => return fail(&format!("unknown column '{k}'")),
+        }
+    }
+    let sql = format!(
+        "SELECT {}{from}{where_sql} ORDER BY {} DESC LIMIT {}",
+        sel.join(", "),
+        ds.time,
+        state.limit()
+    );
+    let count_sql = format!("SELECT count(*){from}{where_sql}");
+    let display = inline(&sql, &params);
+    Plan {
+        error: None,
+        count_sql,
+        count_params: params.clone(),
+        table_sql: sql,
+        table_params: params,
+        chart_sql: String::new(),
+        chart_params: vec![],
+        measure_labels: vec![],
+        group_keys: vec![],
+        display,
+        stacked: false,
+        mode: "events",
     }
 }
 
@@ -874,8 +933,9 @@ fn short(s: &str, n: usize) -> String {
     }
 }
 
-/// Rebuild the `/query` URL for the current state with a different filter set.
-fn build_url(state: &QueryState, filters: &[Filter]) -> String {
+/// Rebuild the `/query` URL for the current state with a different filter set
+/// and result tab.
+fn build_url(state: &QueryState, filters: &[Filter], tab: &str) -> String {
     let m = serde_json::to_string(&state.measures()).unwrap_or_else(|_| "[]".into());
     let g = serde_json::to_string(&state.groups()).unwrap_or_else(|_| "[]".into());
     let f = serde_json::to_string(filters).unwrap_or_else(|_| "[]".into());
@@ -888,12 +948,18 @@ fn build_url(state: &QueryState, filters: &[Filter]) -> String {
         s.push_str(&format!("&bucket={}", qenc(&state.bucket)));
     }
     s.push_str(&format!(
-        "&measures={}&filters={}&group={}",
+        "&measures={}&filters={}&group={}&tab={}",
         qenc(&m),
         qenc(&f),
-        qenc(&g)
+        qenc(&g),
+        qenc(tab)
     ));
     s
+}
+
+/// URL for the same query switched to a different result tab.
+fn tab_url(state: &QueryState, tab: &str) -> String {
+    build_url(state, &state.filters(), tab)
 }
 
 /// URL that toggles a `col = val` equality filter (click again to remove).
@@ -912,7 +978,7 @@ pub fn drill_url(state: &QueryState, col: &str, val: &str) -> String {
             val: val.into(),
         }),
     }
-    build_url(state, &fs)
+    build_url(state, &fs, &state.tab)
 }
 
 /// Compute facet columns for the current dataset + filters: top values and
@@ -1004,8 +1070,18 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
     let s = parse_query_params::<QueryState>(cx).unwrap_or_default();
     let sql_mode = s.is_sql();
 
+    // Pick the result tab. SQL console wins; else honour ?tab=, defaulting to
+    // the raw events when ungrouped and the breakdown when grouped.
+    let want_events = !sql_mode
+        && match s.tab.as_str() {
+            "events" => true,
+            "series" | "breakdown" => false,
+            _ => s.groups().is_empty(),
+        };
     let plan = if sql_mode {
         compile_sql(&s)
+    } else if want_events {
+        compile_events(&s)
     } else {
         compile(&s)
     };
@@ -1020,6 +1096,7 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
     });
     let grouped = !plan.group_keys.is_empty();
     let ng = plan.group_keys.len();
+    let events_mode = plan.mode == "events";
 
     // Facets + per-column stats (builder only): one windowed query per column.
     let facets = if sql_mode { Vec::new() } else { facets(db, &s) };
@@ -1034,6 +1111,17 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
     // Friendly headers (builder) + drill-through links on breakdown cells.
     let head_cells: Vec<(String, Option<String>)> = if sql_mode {
         res.columns.iter().map(|c| (c.clone(), None)).collect()
+    } else if events_mode {
+        let mut h = vec![("time".to_string(), None)];
+        if let Some(d) = ds {
+            h.extend(d.display.iter().map(|k| {
+                let label = resolve_col(d, k)
+                    .map(|r| r.label)
+                    .unwrap_or_else(|| k.to_string());
+                (label, Some(k.to_string()))
+            }));
+        }
+        h
     } else if grouped {
         let mut h: Vec<(String, Option<String>)> = plan
             .group_keys
@@ -1053,6 +1141,7 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
         h.extend(plan.measure_labels.iter().map(|m| (m.clone(), None)));
         h
     };
+    let disp = ds.map(|d| d.display).unwrap_or(&[]);
     let cells: Vec<Vec<(String, Option<String>)>> = res
         .rows
         .iter()
@@ -1060,20 +1149,53 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
             row.iter()
                 .enumerate()
                 .map(|(ci, cell)| {
-                    if !sql_mode && grouped && ci < ng {
-                        let href = if plan.group_keys[ci] == "trace_id" {
+                    let href = if events_mode {
+                        // col 0 is time (plain); then one per display column.
+                        if ci == 0 {
+                            None
+                        } else {
+                            disp.get(ci - 1).map(|k| {
+                                if *k == "trace_id" && !cell.is_empty() {
+                                    format!("/traces?trace={}", cell)
+                                } else {
+                                    drill_url(&s, k, cell)
+                                }
+                            })
+                        }
+                    } else if !sql_mode && grouped && ci < ng {
+                        Some(if plan.group_keys[ci] == "trace_id" {
                             format!("/traces?trace={}", cell)
                         } else {
                             drill_url(&s, &plan.group_keys[ci], cell)
-                        };
-                        (cell.clone(), Some(href))
+                        })
                     } else {
-                        (cell.clone(), None)
-                    }
+                        None
+                    };
+                    (cell.clone(), href)
                 })
                 .collect()
         })
         .collect();
+
+    // Result tabs (builder only). Breakdown shows only when grouped.
+    let tabs: Vec<(&'static str, &'static str, String, bool)> = if sql_mode {
+        Vec::new()
+    } else {
+        let cur = plan.mode;
+        let mut t = vec![
+            ("events", "Events", tab_url(&s, "events"), cur == "events"),
+            ("series", "Series", tab_url(&s, "series"), cur == "series"),
+        ];
+        if grouped {
+            t.push((
+                "breakdown",
+                "Breakdown",
+                tab_url(&s, "breakdown"),
+                cur == "breakdown",
+            ));
+        }
+        t
+    };
 
     // State handed to the client builder so its controls mirror the URL.
     let seed = json!({
@@ -1125,6 +1247,18 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
         if res.error.is_none() {
             <div class="qcols">
                 <div class="qmain">
+                    if !tabs.is_empty() {
+                        <div class="rtabs">
+                            for (_id, label, href, active) in &tabs {
+                                <a
+                                    class=(if *active { "rtab on" } else { "rtab" })
+                                    href=(href.clone())
+                                >
+                                    (label.to_string())
+                                </a>
+                            }
+                        </div>
+                    }
                     <div class="qstats">
                         <span class="qs"><b>(res.total.clone())</b>" rows"</span>
                         if !plan.group_keys.is_empty() {
@@ -1536,5 +1670,42 @@ mod tests {
         assert_eq!(short("hello", 10), "hello");
         assert_eq!(short("hello world", 5), "hello\u{2026}");
         assert_eq!(short("", 3), "");
+    }
+
+    #[test]
+    fn traces_dataset_is_labeled_traces() {
+        let d = dataset("traces").unwrap();
+        assert_eq!(d.label, "Traces");
+        // rows are still spans; trace_id is the drill-through relationship
+        assert!(d.display.contains(&"trace_id"));
+        assert!(d.display.contains(&"name"));
+    }
+
+    #[test]
+    fn events_compiles_raw_rows_newest_first() {
+        let s = state(
+            "traces",
+            r#"[{"col":"service_name","op":"=","val":"cart"}]"#,
+            "",
+            "",
+        );
+        let p = compile_events(&s);
+        assert_eq!(p.error, None);
+        assert_eq!(p.mode, "events");
+        // one column per display field plus time, newest first, capped
+        assert!(p.table_sql.contains("AS \"trace_id\""), "{}", p.table_sql);
+        assert!(p.table_sql.contains("AS \"name\""), "{}", p.table_sql);
+        assert!(p.table_sql.contains("ORDER BY start_time_unix_nano DESC"));
+        assert!(p.table_sql.contains("LIMIT 50"));
+        assert!(p.table_sql.contains("service_name = ?") || p.table_sql.contains("= ?"));
+        // bound, not interpolated: the value never appears in the SQL text
+        assert!(!p.table_sql.contains("cart"));
+        assert!(p.count_sql.starts_with("SELECT count(*)"));
+    }
+
+    #[test]
+    fn events_rejects_bad_column_and_operator() {
+        let s = state("logs", r#"[{"col":"evil","op":"=","val":"x"}]"#, "", "");
+        assert!(compile_events(&s).error.is_some());
     }
 }

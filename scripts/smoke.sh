@@ -145,6 +145,23 @@ _, tpage = get("/query" + q(dataset="traces", range="all", measures='["count"]',
 assert 'class="fcell"' in tpage and "/traces?trace=" in tpage, tpage[:200]
 print("PASS  drill-through opens trace")
 
+# Events tab: raw matching rows, newest first, reachable like /logs and /traces.
+_, ep = get("/query" + q(dataset="logs", range="all"))
+assert 'class="rtab on"' in ep and ">Events<" in ep, "events not default ungrouped"
+assert 'data-stat="body"' in ep and 'data-stat="trace_id"' in ep, "events columns missing"
+assert "cache miss ratio" in ep, "raw log body row missing"      # a real log line
+assert "tab=series" in ep and "tab=events" in ep, "events tab links missing"
+print("PASS  events tab (raw rows)")
+
+_, tev = get("/query" + q(dataset="traces", range="all"))
+assert ">Events<" in tev and 'data-stat="name"' in tev, "span events missing"
+assert "/traces?trace=" in tev, "span events trace drill missing"
+print("PASS  events tab opens trace")
+
+_, gtab = get("/query" + q(dataset="logs", range="all", measures='["count"]', group='["service_name"]'))
+assert ">Breakdown<" in gtab and 'class="rtab on"' in gtab and "tab=events" in gtab, "grouped tabs missing"
+print("PASS  grouped shows events+series+breakdown")
+
 # Server-rendered distributions for the two histogram shapes.
 HG = "/metrics?shape=histogram&name=http.request.duration&service=api-gateway&chart=1"
 wait_for("histogram catalog", "/metrics", "http.request.duration")

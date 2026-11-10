@@ -177,6 +177,12 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 .sqlbar button:hover { background: #22855a; }
 .qsql { margin-top: 0.9rem; }
 .qsql summary { cursor: pointer; color: #8a93a5; font-size: 0.8rem; }
+/* — explore: result tab bar (events / series / breakdown) — */
+.rtabs { display: flex; gap: 0.15rem; border-bottom: 1px solid #1b212e; margin-bottom: 0.7rem; }
+.rtab { padding: 0.35rem 0.75rem; font-size: 0.8rem; color: #8a93a5; text-decoration: none;
+        border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.rtab:hover { color: #d7dce5; }
+.rtab.on { color: #eaf0fa; border-bottom-color: #4f8cc9; }
 /* — explore: two-column results + facet sidebar + stats tooltip — */
 .qcols { display: grid; grid-template-columns: minmax(0, 1fr) 224px; gap: 1.2rem; align-items: start; }
 .qmain { min-width: 0; }
