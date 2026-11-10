@@ -1320,6 +1320,7 @@ dependencies = [
  "chrono",
  "duckdb",
  "serde",
+ "serde_json",
  "tokio",
  "topcoat",
 ]
