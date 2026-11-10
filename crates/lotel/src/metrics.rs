@@ -45,6 +45,19 @@ fn urlenc(s: &str) -> String {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::urlenc;
+
+    #[test]
+    fn encodes_query_values() {
+        assert_eq!(urlenc("checkout.queue.depth"), "checkout.queue.depth");
+        assert_eq!(urlenc("http.method=POST"), "http.method%3DPOST");
+        assert_eq!(urlenc("a b&c=d"), "a%20b%26c%3Dd");
+        assert_eq!(urlenc(""), "");
+    }
+}
+
 fn table_for(shape: &str) -> &'static str {
     match shape {
         "sum" => "otlp_metrics_sum",

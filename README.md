@@ -1,27 +1,108 @@
 # lotel — local OpenTelemetry, one binary
 
-OTLP ingest → capped DuckDB store (age/size/count retention enforced by the
-storage layer) → Topcoat UI. Uses the `capped` DuckDB extension (this repo's
-sibling project) for storage and retention, and the community `otlp` extension
-for the protocol.
+`lotel` is a self-contained OpenTelemetry backend: a single Rust binary that
+accepts OTLP/HTTP, stores logs, traces and metrics in a DuckDB data directory
+with hard age-and-size caps, and serves a browsable UI on localhost. No JVM,
+no ClickHouse cluster, no Docker Compose — `./lotel` and you're collecting.
 
-Status: M0 — embedded store + status UI. Ingest and signal views are next.
+It's built for the local-development and indie-SaaS end of the market: point
+your SDK at it, look at your telemetry, and know exactly when it will be
+forgotten — retention isn't a background job you have to remember to run, it's
+enforced by the storage layer itself.
 
-## Build
+```
+OTLP/HTTP :4318 ──▶ otlp extension ──▶ capped DuckDB tables ──▶ parquet segments + manifests
+                                                     │
+                                          Topcoat UI :8080 (dashboard · logs · traces · metrics · storage)
+```
 
-The storage layer is a prebuilt DuckDB extension shipped inside the binary:
+## What you get
+
+- **All three signals.** Logs, traces and metrics over OTLP/HTTP
+  (`/v1/logs`, `/v1/traces`, `/v1/metrics`), bearer-token authenticated.
+- **Retention you can reason about.** Every table is capped: logs default to
+  7 days, traces to 3, metrics to 30, each with a per-table size cap. The caps
+  live in the storage layer, so old data physically cannot accumulate.
+- **Logs explorer** with text search, service/severity/time-range filters and
+  a live tail that updates in place.
+- **Trace waterfall** — spans tree-ordered and positioned by start/duration,
+  service-colored, errored spans outlined, click-through span detail with
+  attributes.
+- **Metric charts** — uPlot charts embedded in the binary (no CDN), per
+  `(shape, name, service)`.
+- **Storage truth** — every segment on disk: rows, bytes, time window, TTL,
+  seal state. The store is just parquet files; inspect it with plain DuckDB.
+- **First-run demo data** so the UI has a heartbeat before you send anything.
+
+## Quick start
 
 ```sh
-just fetch-extensions   # copies ../capped/shell/build/release/…/capped.duckdb_extension
-cargo run               # http://127.0.0.1:8080
+cargo run                 # or: just run (fetches extensions first)
+# UI:        http://127.0.0.1:8080
+# OTLP:      http://127.0.0.1:4318  (bearer token printed at startup)
 ```
+
+Then point a collector or SDK at it:
+
+```sh
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token printed at boot>"
+```
+
+## How it works
+
+Two DuckDB extensions, embedded into the binary at compile time and
+materialized to `<data>/extensions/` at boot:
+
+- [`capped`](../capped) (sibling project) provides the storage layer: tables
+  are sealed parquet segments plus one open segment, `WITH (time_col, ttl,
+  max_bytes)` policies enforce retention at the segment level, and
+  `capped_tables()` / `capped_status()` expose the truth.
+- the community [`otlp`](https://github.com/smithclay/duckdb-otlp) extension
+  provides `otlp_serve()`: an OTLP/HTTP receiver that appends directly into
+  the capped tables (lotel pre-creates the six canonical `otlp_*` tables with
+  cap policies so the receiver never creates an uncapped one).
+
+The UI is [Topcoat](https://github.com/tokio-rs/topcoat) server-rendered
+views; the live tail and charts poll small bare fragment/JSON endpoints.
 
 ## Configuration (env-only, read at boot)
 
 | Var | Default | Meaning |
 |---|---|---|
 | `LOTEL_ADDR` | `127.0.0.1:8080` | UI bind address |
+| `LOTEL_OTLP_ADDR` | `127.0.0.1:4318` | OTLP/HTTP listen address |
 | `LOTEL_DATA_DIR` | `./lotel-data` | data directory |
+| `LOTEL_INGEST_TOKEN` | random per boot | bearer token for ingest (≥16 chars) |
 | `LOTEL_EXTENSION_DIR` | — | use external `.duckdb_extension` files instead of embedded |
 | `LOTEL_TTL_LOGS` / `_TRACES` / `_METRICS` | `7 days` / `3 days` / `30 days` | per-signal age caps |
 | `LOTEL_MAX_BYTES` | `2GB` | per-table size cap |
+
+## Building
+
+```sh
+just fetch-extensions   # copies capped + otlp extension files in for embedding
+cargo build --release   # target/release/lotel
+cargo test              # unit tests (pure logic; no extensions needed)
+./scripts/smoke.sh      # boots the binary, ingests testdata/, checks every page
+```
+
+`just fetch-extensions` expects the sibling `capped` shell built
+(`cd ../capped/shell && GEN=ninja make release`) and the community `otlp`
+extension installed for the pinned DuckDB version. Both are then
+`include_bytes!`-embedded, so the shipped binary needs nothing at runtime.
+
+## Status & roadmap
+
+Done: OTLP ingest → capped store, dashboard, logs explorer with live tail,
+trace waterfall, metric charts, storage view.
+
+Next: histogram/exp-histogram charts, a Rust OTLP receiver replacing the
+extension-based ingest (crash-durable, backpressured), multi-tenant
+control plane for the hosted flavor, `install.sh` + Docker images with
+per-platform extension bundles.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

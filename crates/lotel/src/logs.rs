@@ -46,6 +46,30 @@ impl LogFilters {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::LogFilters;
+
+    #[test]
+    fn all_time_cutoff_is_epoch() {
+        let f = LogFilters::default();
+        let (cutoff, limit) = f.bind();
+        assert_eq!(cutoff, "1970-01-01 00:00:00");
+        assert_eq!(limit, 200);
+    }
+
+    #[test]
+    fn range_and_limit_are_clamped() {
+        let f = LogFilters { range: "24h".into(), limit: Some(9999), ..Default::default() };
+        let (cutoff, limit) = f.bind();
+        assert_ne!(cutoff, "1970-01-01 00:00:00");
+        assert_eq!(limit, 2000);
+
+        let f = LogFilters { limit: Some(0), ..Default::default() };
+        assert_eq!(f.bind().1, 1);
+    }
+}
+
 /// One rendered log line.
 pub struct LogRow {
     pub time: String,

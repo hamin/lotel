@@ -23,3 +23,16 @@ run: fetch-extensions
 # Fast checks
 check: fetch-extensions
     cargo check
+
+# Pure-logic unit tests (no extension files needed; build.rs stubs them).
+test:
+    cargo test
+
+# Lint
+lint:
+    cargo clippy --all-targets -- -D warnings
+
+# End-to-end: boots the binary, ingests testdata/, asserts every page.
+smoke: fetch-extensions
+    cargo build
+    ./scripts/smoke.sh

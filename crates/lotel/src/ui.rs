@@ -128,12 +128,30 @@ pub(crate) fn sev_class(sev: &str) -> &'static str {
         "INFO" | "INFORMATION" | "INFORMATIONAL" | "NOTICE" => "info",
         "WARN" | "WARNING" => "warn",
         "ERROR" | "ERR" | "FATAL" | "CRITICAL" | "CRIT" | "EMERGENCY" | "EMERG" | "ALERT" => {
-            if sev.to_ascii_uppercase() == "FATAL" || sev.to_ascii_uppercase() == "CRITICAL" {
+            if sev.eq_ignore_ascii_case("FATAL") || sev.eq_ignore_ascii_case("CRITICAL") {
                 "fatal"
             } else {
                 "error"
             }
         }
         _ => "other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sev_class;
+
+    #[test]
+    fn severity_families() {
+        assert_eq!(sev_class("INFO"), "info");
+        assert_eq!(sev_class("information"), "info");
+        assert_eq!(sev_class("WARN"), "warn");
+        assert_eq!(sev_class("WARNING"), "warn");
+        assert_eq!(sev_class("ERROR"), "error");
+        assert_eq!(sev_class("FATAL"), "fatal");
+        assert_eq!(sev_class("critical"), "fatal");
+        assert_eq!(sev_class(""), "other");
+        assert_eq!(sev_class("banana"), "other");
     }
 }

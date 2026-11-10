@@ -1,0 +1,39 @@
+{
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "checkout"}}
+        ]
+      },
+      "scopeMetrics": [
+        {
+          "scope": {"name": "checkout.payments"},
+          "metrics": [
+            {
+              "name": "checkout.queue.depth",
+              "unit": "{items}",
+              "gauge": {
+                "dataPoints": [
+                  {"timeUnixNano": "1762700000000000000", "asDouble": 42.0},
+                  {"timeUnixNano": "1762700010000000000", "asDouble": 37.5}
+                ]
+              }
+            },
+            {
+              "name": "checkout.payments.total",
+              "unit": "{payments}",
+              "sum": {
+                "dataPoints": [
+                  {"timeUnixNano": "1762700000000000000", "asInt": "120"}
+                ],
+                "aggregationTemporality": 2,
+                "isMonotonic": true
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

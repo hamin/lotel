@@ -66,7 +66,39 @@ fn fmt_ms(ns: i64) -> String {
     } else if ms >= 10.0 {
         format!("{:.1} ms", ms)
     } else {
-        format!("{:.2} ms", ms)
+        format!("{:.2} ms", ns as f64 / 1e6)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fmt_ms, kind_label, service_class};
+
+    #[test]
+    fn durations_format_humably() {
+        assert_eq!(fmt_ms(3_900_000_000), "3.90 s");
+        assert_eq!(fmt_ms(1_500_000), "1.50 ms");
+        assert_eq!(fmt_ms(12_340_000), "12.3 ms");
+        assert_eq!(fmt_ms(12_345_678), "12.3 ms");
+        assert_eq!(fmt_ms(500_000), "0.50 ms");
+    }
+
+    #[test]
+    fn kind_labels() {
+        assert_eq!(kind_label(2), "server");
+        assert_eq!(kind_label(3), "client");
+        assert_eq!(kind_label(0), "");
+    }
+
+    #[test]
+    fn service_colors_are_stable_and_bounded() {
+        assert_eq!(service_class("checkout"), service_class("checkout"));
+        for s in ["checkout", "cart", "payments", "api-gateway", ""] {
+            assert!(
+                ["svc0", "svc1", "svc2", "svc3", "svc4", "svc5"].contains(&service_class(s)),
+                "bad class for {s}"
+            );
+        }
     }
 }
 

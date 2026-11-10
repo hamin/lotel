@@ -27,7 +27,13 @@ fn human_us(us: &str) -> String {
     if v == 0 {
         return "—".into();
     }
-    let units = [("d", 86_400_000_000i64), ("h", 3_600_000_000), ("m", 60_000_000), ("s", 1_000_000)];
+    let units = [
+        ("d", 86_400_000_000i64),
+        ("h", 3_600_000_000),
+        ("m", 60_000_000),
+        ("s", 1_000_000),
+        ("ms", 1_000),
+    ];
     for (u, size) in units {
         if v >= size {
             return format!("{}{}", v / size, u);
@@ -40,13 +46,38 @@ fn human_bytes(b: &str) -> String {
     let Ok(v) = b.parse::<i64>() else {
         return b.to_string();
     };
-    const UNITS: [(&str, i64); 4] = [("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10), ("B", 1)];
+    const UNITS: [(&str, i64); 3] = [("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)];
     for (u, size) in UNITS {
         if v >= size {
             return format!("{:.1} {}", v as f64 / size as f64, u);
         }
     }
-    format!("{v}B")
+    format!("{v} B")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{human_bytes, human_us};
+
+    #[test]
+    fn humanizes_ttl() {
+        assert_eq!(human_us("604800000000"), "7d");
+        assert_eq!(human_us("259200000000"), "3d");
+        assert_eq!(human_us("2592000000000"), "30d");
+        assert_eq!(human_us("3600000000"), "1h");
+        assert_eq!(human_us("0"), "—");
+        assert_eq!(human_us("500000"), "500ms");
+        assert_eq!(human_us("not-a-number"), "not-a-number");
+    }
+
+    #[test]
+    fn humanizes_sizes() {
+        assert_eq!(human_bytes("2000000000"), "1.9 GB");
+        assert_eq!(human_bytes("1047"), "1.0 KB");
+        assert_eq!(human_bytes("512"), "512 B");
+        assert_eq!(human_bytes("1048576"), "1.0 MB");
+        assert_eq!(human_bytes("x"), "x");
+    }
 }
 
 #[page]

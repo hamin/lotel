@@ -1,0 +1,36 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "checkout"}},
+          {"key": "deployment.environment", "value": {"stringValue": "prod"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {"name": "checkout.payments", "version": "1.2.0"},
+          "logRecords": [
+            {
+              "timeUnixNano": "1762700000000000000",
+              "severityNumber": 17,
+              "severityText": "ERROR",
+              "body": {"stringValue": "gateway timeout after 3 retries"},
+              "attributes": [
+                {"key": "http.status_code", "value": {"intValue": "504"}}
+              ],
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "eee19b7ec3c1b174"
+            },
+            {
+              "timeUnixNano": "1762700001000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {"stringValue": "payment authorized"}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
