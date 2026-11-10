@@ -82,6 +82,31 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
 .stat .n { font-size: 1.5rem; font-weight: 650; }
 .stat .l { font-size: 0.72rem; color: #7d8595; text-transform: uppercase; letter-spacing: 0.08em; }
+/* — trace waterfall — */
+.wf { border: 1px solid #1b212e; border-radius: 8px; background: #0e1420;
+      padding: 0.5rem 0.75rem; font-size: 0.8rem; }
+.wfruler, .wfrow { display: grid; grid-template-columns: 320px 1fr; gap: 0.6rem;
+                   align-items: center; }
+.wfruler { color: #5c6575; font-size: 0.68rem; padding-bottom: 0.3rem;
+           border-bottom: 1px solid #1b212e; margin-bottom: 0.35rem; }
+.wfruler .wftrack { position: relative; height: 1rem; }
+.wfruler .tick { position: absolute; top: 0; }
+.wfrow { color: inherit; text-decoration: none; padding: 0.12rem 0; border-radius: 4px; }
+.wfrow:hover { background: #141a26; }
+.wflabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wflabel b { color: #c8d2e2; font-weight: 600; }
+.wftrack { position: relative; height: 1.15rem; }
+.wfbar { position: absolute; top: 0.12rem; height: 0.9rem; min-width: 2px;
+         border-radius: 3px; font-size: 0.66rem; line-height: 0.9rem;
+         padding: 0 0.3rem; overflow: hidden; white-space: nowrap; color: #0b0e14; }
+.wfbar.wferr { outline: 1.5px solid #f0858a; }
+.svc-dot { font-size: 0.6rem; margin-right: 0.15rem; }
+.svc0, .wfbar.svc0 { background: #4f8cc9; } .svc-dot.svc0 { background: none; color: #4f8cc9; }
+.svc1, .wfbar.svc1 { background: #57b98a; } .svc-dot.svc1 { background: none; color: #57b98a; }
+.svc2, .wfbar.svc2 { background: #c9a04f; } .svc-dot.svc2 { background: none; color: #c9a04f; }
+.svc3, .wfbar.svc3 { background: #b07fc9; } .svc-dot.svc3 { background: none; color: #b07fc9; }
+.svc4, .wfbar.svc4 { background: #c97f7f; } .svc-dot.svc4 { background: none; color: #c97f7f; }
+.svc5, .wfbar.svc5 { background: #6fb3b8; } .svc-dot.svc5 { background: none; color: #6fb3b8; }
 "#;
 
 /// Sidebar nav: (label, path).
