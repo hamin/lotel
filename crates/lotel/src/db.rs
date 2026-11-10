@@ -120,30 +120,55 @@ impl Db {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let wrapped = format!("SELECT COLUMNS(*)::VARCHAR FROM ({sql})");
 
-        // duckdb-rs only exposes column metadata after execution: probe once
-        // (an empty result is fine — it still executed), then read the values.
-        let columns: Vec<String> = {
-            let mut probe = conn.prepare(&wrapped)?;
-            probe.query_row(params, |_| Ok(())).ok();
-            (0..probe.column_count())
-                .map(|i| {
-                    probe
-                        .column_name(i)
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|_| format!("col{i}"))
-                })
-                .collect()
-        };
+        // duckdb-rs only exposes column metadata after a *successful* execution:
+        // probe once (an empty result is fine — it still executed), then read the
+        // values. A real execution error must propagate here: reading column
+        // names of a statement that never ran panics inside duckdb-rs
+        // ("The statement was not executed yet"), and a panicking request would
+        // poison the shared connection for every page behind it.
+        let mut probe = conn.prepare(&wrapped)?;
+        match probe.query_row(params, |_| Ok(())) {
+            Ok(()) | Err(duckdb::Error::QueryReturnedNoRows) => {}
+            Err(e) => {
+                eprintln!("lotel: query failed: {e}\n  sql: {wrapped}");
+                return Err(e.into());
+            }
+        }
+        let columns: Vec<String> = (0..probe.column_count())
+            .map(|i| {
+                probe
+                    .column_name(i)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_| format!("col{i}"))
+            })
+            .collect();
+        drop(probe);
 
         let mut stmt = conn.prepare(&wrapped)?;
-        let rows = stmt
-            .query_map(params, |row| {
-                (0..columns.len())
-                    .map(|i| row.get::<_, Option<String>>(i).map(|v| v.unwrap_or_default()))
-                    .collect::<Result<Vec<_>, _>>()
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((columns, rows))
+        let rows = stmt.query_map(params, |row| {
+            (0..columns.len())
+                .map(|i| row.get::<_, Option<String>>(i).map(|v| v.unwrap_or_default()))
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        // Drain every row even when one fails to convert, so the statement is
+        // fully consumed before it drops; keep the first error to report.
+        let mut out: Vec<Vec<String>> = Vec::new();
+        let mut first_err: Option<duckdb::Error> = None;
+        for r in rows {
+            match r {
+                Ok(v) => out.push(v),
+                Err(e) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+            }
+        }
+        if let Some(e) = first_err {
+            eprintln!("lotel: row fetch failed: {e}\n  sql: {wrapped}");
+            return Err(e.into());
+        }
+        Ok((columns, out))
     }
 
     pub fn duckdb_version(&self) -> anyhow::Result<String> {
@@ -163,5 +188,58 @@ impl std::fmt::Debug for Db {
             .field("data_dir", &self.data_dir)
             .field("capped_version", &self.capped_version)
             .finish()
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Open a throwaway Db (real DuckDB + capped), one dir per test.
+    fn temp_db(tag: &str) -> Db {
+        let dir = std::env::temp_dir().join(format!("lotel-db-test-{tag}"));
+        let _ = fs::remove_dir_all(&dir);
+        let cfg = Config {
+            host: "127.0.0.1".into(),
+            port: 0,
+            data_dir: dir,
+            extension_dir: None,
+            ttl_logs: "7 days".into(),
+            ttl_traces: "3 days".into(),
+            ttl_metrics: "30 days".into(),
+            max_bytes: "64MB".into(),
+            otlp_addr: "127.0.0.1:0".into(),
+            ingest_token: None,
+        };
+        Db::open(&cfg).expect("open temp db")
+    }
+
+    /// A failing query must surface as Err — not panic on column metadata for a
+    /// statement that never executed, which took down every page behind the
+    /// shared connection (the M14 field bug).
+    #[test]
+    fn failed_query_errors_without_poisoning_the_connection() {
+        let db = temp_db("failed-query");
+        let bad = db.query_rows("SELECT * FROM no_such_table_xyz");
+        assert!(bad.is_err(), "failing query must return Err");
+        let (cols, rows) = db
+            .query_rows("SELECT 42 AS answer")
+            .expect("later queries must still work");
+        assert_eq!(cols, ["answer"]);
+        assert_eq!(rows, vec![vec!["42".to_string()]]);
+        let _ = fs::remove_dir_all(&db.data_dir);
+    }
+
+    /// An executed-but-empty result is not an error: column names still exist.
+    #[test]
+    fn empty_result_still_reports_columns() {
+        let db = temp_db("empty-result");
+        let (cols, rows) = db
+            .query_rows_with("SELECT 1 AS n WHERE 1 = 0", &[])
+            .expect("empty result must not error");
+        assert_eq!(cols, ["n"]);
+        assert!(rows.is_empty());
+        let _ = fs::remove_dir_all(&db.data_dir);
     }
 }
