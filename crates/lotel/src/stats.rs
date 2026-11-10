@@ -221,6 +221,93 @@ pub fn error_series(db: &Db, range: &str) -> (Vec<f64>, Vec<SvcSeries>) {
     (overall, series)
 }
 
+
+// ———————————————————————————————————————————— latency time series —————————
+
+/// One service's p95-latency (ms) series over a range.
+pub struct SvcLatency {
+    pub service: String,
+    pub p95s: Vec<f64>,
+    pub total: i64,
+}
+
+/// p95-latency-per-bucket series per service (and an overall series) over
+/// `range`, oldest→newest. Buckets with no spans are absent, not zero: a
+/// line connecting the observed buckets says "nothing was seen there",
+/// while a dip to 0 would falsely claim "everything was fast".
+pub fn latency_series(db: &Db, range: &str) -> (Vec<f64>, Vec<SvcLatency>) {
+    let bucket = interval_for(range);
+    let cut = cutoff_for(range);
+    let since = |col: &str| -> String {
+        match &cut {
+            Some(_) => format!("WHERE {col} >= CAST(? AS TIMESTAMP)"),
+            None => String::new(),
+        }
+    };
+    let params: Vec<&dyn duckdb::ToSql> = match &cut {
+        Some(c) => vec![c as &dyn duckdb::ToSql],
+        None => vec![],
+    };
+
+    let overall_sql = format!(
+        "SELECT quantile_cont(duration_time_unix_nano / 1000000.0, 0.95) \
+         FROM otel.main.otlp_traces {w} \
+         GROUP BY time_bucket(INTERVAL '{bucket}', start_time_unix_nano) \
+         ORDER BY time_bucket(INTERVAL '{bucket}', start_time_unix_nano)",
+        w = since("start_time_unix_nano")
+    );
+    let overall = db
+        .query_rows_with(&overall_sql, &params)
+        .unwrap_or_default()
+        .1
+        .into_iter()
+        .filter_map(|r| r.first()?.parse().ok())
+        .collect();
+
+    let svc_sql = format!(
+        "SELECT service_name, \
+                time_bucket(INTERVAL '{bucket}', start_time_unix_nano) AS b, \
+                quantile_cont(duration_time_unix_nano / 1000000.0, 0.95) AS p95, \
+                count(*) AS n \
+         FROM otel.main.otlp_traces {w} \
+         GROUP BY 1, 2 ORDER BY 1, 2",
+        w = since("start_time_unix_nano")
+    );
+    let grouped = db.query_rows_with(&svc_sql, &params).unwrap_or_default().1;
+    let mut per: BTreeMap<String, (Vec<f64>, i64)> = BTreeMap::new();
+    for r in grouped {
+        if r.len() < 4 {
+            continue;
+        }
+        let svc = if r[0].is_empty() {
+            "—".to_string()
+        } else {
+            r[0].clone()
+        };
+        let Ok(p95) = r[2].parse::<f64>() else { continue };
+        let e = per.entry(svc).or_default();
+        e.0.push(p95);
+        e.1 += r[3].parse().unwrap_or(0);
+    }
+    let mut series: Vec<SvcLatency> = per
+        .into_iter()
+        .map(|(service, (p95s, total))| SvcLatency {
+            service,
+            p95s,
+            total,
+        })
+        .collect();
+    // Slowest peak first, then busiest.
+    series.sort_by(|a, b| {
+        let am = a.p95s.iter().copied().fold(0.0f64, f64::max);
+        let bm = b.p95s.iter().copied().fold(0.0f64, f64::max);
+        bm.partial_cmp(&am)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.total.cmp(&a.total))
+    });
+    (overall, series)
+}
+
 /// Per-service span volume, error count, and latency percentiles over `range`.
 pub struct SvcStat {
     pub service: String,

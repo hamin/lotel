@@ -250,6 +250,16 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 .sm-err { color: #f0858a; } .sm-err.dim { color: #b98a8d; } .sm-ok { color: #57b98a; }
 .sm-spark { line-height: 0; }
 .sm-legend { font-size: 0.78rem; }
+.sm-lat svg { display: block; }
+.lat { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.15fr); gap: 1.4rem; margin: 0.2rem 0 1.2rem; }
+.lat h3 { margin: 0 0 0.5rem; font-size: 0.68rem; letter-spacing: 0.09em; text-transform: uppercase; color: #7d8595; }
+.lat svg { max-width: 100%; }
+.lat-cap { font-size: 0.72rem; color: #7d8595; margin: 0.4rem 0 0; }
+.dist-row { display: grid; grid-template-columns: 84px 1fr 52px; gap: 0.5rem; align-items: center; padding: 0.12rem 0; font-size: 0.76rem; }
+.dist-n { text-align: right; color: #7d8595; font-variant-numeric: tabular-nums; }
+@media (max-width: 900px) {
+    .lat { grid-template-columns: 1fr; }
+}
 
 .facets { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 0.2rem 0 1.1rem; }
 .facet { background: #0e1420; border: 1px solid #1b2334; border-radius: 10px; padding: 0.6rem 0.75rem; }

@@ -6,10 +6,10 @@ use topcoat::{
     Result,
     context::{Cx, context},
     router::{page, parse_query_params},
-    view::{BoxView, View, ViewExt, component, view},
+    view::{BoxView, Unescaped, View, ViewExt, component, view},
 };
 
-use crate::db::Db;
+use crate::{db::Db, stats};
 
 #[derive(Debug, Default, Deserialize)]
 pub struct TraceFilters {
@@ -70,9 +70,25 @@ fn fmt_ms(ns: i64) -> String {
     }
 }
 
+/// Label for a duration-distribution bucket (the CASE in the feed query).
+fn dist_label(b: i64) -> &'static str {
+    match b {
+        0 => "<1 ms",
+        1 => "1–5 ms",
+        2 => "5–10 ms",
+        3 => "10–25 ms",
+        4 => "25–50 ms",
+        5 => "50–100 ms",
+        6 => "100–250 ms",
+        7 => "250–500 ms",
+        8 => "500 ms–1 s",
+        _ => "≥1 s",
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{fmt_ms, kind_label, service_class};
+    use super::{dist_label, fmt_ms, kind_label, service_class};
 
     #[test]
     fn durations_format_humably() {
@@ -88,6 +104,15 @@ mod tests {
         assert_eq!(kind_label(2), "server");
         assert_eq!(kind_label(3), "client");
         assert_eq!(kind_label(0), "");
+    }
+
+    #[test]
+    fn duration_buckets_read_left_to_right() {
+        assert_eq!(dist_label(0), "<1 ms");
+        assert_eq!(dist_label(5), "50–100 ms");
+        assert_eq!(dist_label(8), "500 ms–1 s");
+        assert_eq!(dist_label(9), "≥1 s");
+        assert_eq!(dist_label(99), "≥1 s", "everything past a second lands in the last bucket");
     }
 
     #[test]
@@ -231,21 +256,106 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
         )
         .unwrap_or_else(|e| (vec!["error".into()], vec![vec![format!("{e}")]]));
 
+    // Latency analytics over the whole store (the feed has no range filter):
+    // an overall p95 trend, a per-service trend column, and a duration
+    // histogram. One shared amber scale keeps every sparkline comparable.
+    let (overall_p95, lat_series) = stats::latency_series(db, "all");
+    let max_p95 = lat_series
+        .iter()
+        .flat_map(|s| s.p95s.iter().copied())
+        .chain(overall_p95.iter().copied())
+        .fold(0.0f64, f64::max)
+        .max(1.0);
+    let trends: Vec<String> = services
+        .1
+        .iter()
+        .map(|r| {
+            let key = if r[0].is_empty() { "—" } else { r[0].as_str() };
+            lat_series
+                .iter()
+                .find(|s| s.service == key)
+                .map(|s| stats::spark_svg(&s.p95s, 130.0, 22.0, "#e8b04a", max_p95))
+                .unwrap_or_default()
+        })
+        .collect();
+    let overall_spark = if overall_p95.is_empty() {
+        String::new()
+    } else {
+        stats::spark_svg(&overall_p95, 560.0, 44.0, "#e8b04a", max_p95)
+    };
+
+    let dist = db
+        .query_rows_with(
+            "WITH d AS (
+                SELECT duration_time_unix_nano / 1000000.0 AS ms FROM otel.main.otlp_traces
+                WHERE (? = '' OR service_name = ?) AND duration_time_unix_nano IS NOT NULL)
+             SELECT CASE
+                        WHEN ms < 1 THEN 0   WHEN ms < 5 THEN 1    WHEN ms < 10 THEN 2
+                        WHEN ms < 25 THEN 3  WHEN ms < 50 THEN 4   WHEN ms < 100 THEN 5
+                        WHEN ms < 250 THEN 6 WHEN ms < 500 THEN 7  WHEN ms < 1000 THEN 8
+                        ELSE 9 END AS b, count(*) AS n
+             FROM d GROUP BY 1 ORDER BY 1",
+            &[&f.service, &f.service],
+        )
+        .unwrap_or_default()
+        .1;
+    let dist_top = dist
+        .iter()
+        .filter_map(|r| r[1].parse::<f64>().ok())
+        .fold(0.0f64, f64::max)
+        .max(1.0);
+    let dist_rows: Vec<(String, String, u32)> = dist
+        .into_iter()
+        .filter_map(|r| {
+            let b = r[0].parse::<i64>().ok()?;
+            let w = ((r[1].parse::<f64>().unwrap_or(0.0) / dist_top) * 100.0).round() as u32;
+            Some((dist_label(b).to_string(), r[1].clone(), w))
+        })
+        .collect();
+
     Ok(view! {
         <h1>"Traces"</h1>
         <p class="sub">"Spans land in the capped store with age-based retention; p95 comes straight from the segment files."</p>
 
+        <div class="card lat">
+            <div>
+                <h3>"Overall p95 per bucket"</h3>
+                if overall_spark.is_empty() {
+                    <p class="muted">"No spans in the store yet."</p>
+                } else {
+                    (Unescaped::new_unchecked(overall_spark))
+                    <p class="lat-cap">(stats::interval_for("all"))" buckets · amber, one shared scale across all sparklines on this page"</p>
+                }
+            </div>
+            <div>
+                <h3>"Span duration distribution"</h3>
+                if dist_rows.is_empty() {
+                    <p class="muted">"No spans with a duration yet."</p>
+                }
+                for (label, n, width) in &dist_rows {
+                    <div class="dist-row">
+                        <span class="muted">(label.clone())</span>
+                        <span class="facet-bar"><i style=(format!("width:{}%", width))></i></span>
+                        <span class="dist-n">(n.clone())</span>
+                    </div>
+                }
+            </div>
+        </div>
+
         <h2>"By service"</h2>
         <table>
             <thead>
-                <tr><th>"service"</th><th>"spans"</th><th>"p50 ms"</th><th>"p95 ms"</th><th>"errors"</th></tr>
+                <tr><th>"service"</th><th>"spans"</th><th>"p50 ms"</th><th>"p95 ms"</th><th>"errors"</th><th>"p95 trend"</th></tr>
             </thead>
             <tbody>
-                for row in &services.1 {
+                for (row, trend) in services.1.iter().zip(&trends) {
                     <tr>
-                        for cell in row {
-                            <td>(cell.clone())</td>
-                        }
+                        <td>(row[0].clone())</td>
+                        <td>(row[1].clone())</td>
+                        <td>(row[2].clone())</td>
+                        <td>(row[3].clone())</td>
+                        <td>(row[4].clone())</td>
+                        <td class="sm-spark sm-lat">(Unescaped::new_unchecked(trend.clone()))</td>
                     </tr>
                 }
             </tbody>

@@ -40,7 +40,7 @@ pub struct MapFilters {
 const COLX: f64 = 224.0;
 const ROWY: f64 = 96.0;
 const NODE_W: f64 = 172.0;
-const NODE_H: f64 = 68.0;
+const NODE_H: f64 = 92.0;
 const PAD: f64 = 10.0;
 /// Max ranking passes — bounds the longest-path loop and caps runaway cycles.
 const MAX_PASSES: usize = 64;
@@ -142,6 +142,7 @@ pub(crate) struct NodeView {
     err_class: String,
     err_text: String,
     spark: String,
+    lat: String,
     x: f64,
     y: f64,
 }
@@ -179,6 +180,7 @@ pub(crate) fn build_live(db: &Db, range: &str) -> LiveInput {
     let nodes = stats::service_stats(db, range);
     let edges = stats::service_edges(db, range);
     let (_, svc_series) = stats::error_series(db, range);
+    let (_, lat_series) = stats::latency_series(db, range);
     let rate_of = |t: i64, e: i64| if t == 0 { 0.0 } else { e as f64 / t as f64 };
     // Shared scale so node sparklines are comparable; floor keeps them visible.
     let max_rate = svc_series
@@ -193,6 +195,15 @@ pub(crate) fn build_live(db: &Db, range: &str) -> LiveInput {
         nodes.iter().map(|s| (s.service.as_str(), s)).collect();
     let series_by_svc: HashMap<&str, &crate::stats::SvcSeries> =
         svc_series.iter().map(|s| (s.service.as_str(), s)).collect();
+    let lat_by_svc: HashMap<&str, &crate::stats::SvcLatency> =
+        lat_series.iter().map(|s| (s.service.as_str(), s)).collect();
+    // Shared p95 scale so node latency sparklines are comparable; the floor
+    // keeps a quiet service flat at the bottom instead of amplifying noise.
+    let max_p95 = lat_series
+        .iter()
+        .flat_map(|s| s.p95s.iter().copied())
+        .fold(0.0f64, f64::max)
+        .max(50.0);
 
     // Precompute all owned render data BEFORE the view, so nothing the view
     // captures borrows a local.
@@ -237,6 +248,10 @@ pub(crate) fn build_live(db: &Db, range: &str) -> LiveInput {
                 .get(l.name.as_str())
                 .map(|s| stats::spark_svg(&s.rates, 152.0, 26.0, "#f0858a", max_rate))
                 .unwrap_or_default();
+            let lat = lat_by_svc
+                .get(l.name.as_str())
+                .map(|s| stats::spark_svg(&s.p95s, 152.0, 16.0, "#e8b04a", max_p95))
+                .unwrap_or_default();
             NodeView {
                 name: l.name.clone(),
                 href: format!("/traces?service={}", urlenc(&l.name)),
@@ -251,6 +266,7 @@ pub(crate) fn build_live(db: &Db, range: &str) -> LiveInput {
                 err_class,
                 err_text,
                 spark,
+                lat,
                 x: l.x,
                 y: l.y,
             }
@@ -305,6 +321,7 @@ pub(crate) async fn sm_map(cx: &Cx, input: LiveInput) -> Result<impl View> {
                                 <span class=(n.err_class)>(n.err_text)</span>
                             </div>
                             <div class="sm-spark">(Unescaped::new_unchecked(n.spark))</div>
+                            <div class="sm-spark sm-lat">(Unescaped::new_unchecked(n.lat))</div>
                         </a>
                     }
                 </div>
@@ -357,7 +374,7 @@ async fn services(cx: &Cx) -> Result<BoxView<'_>> {
 
         <h2>"Legend"</h2>
         <p class="muted sm-legend">
-            "Click a service to open its spans · the edge label is its call count · red means at least 2% errors · the sparkline is the error-rate trend, shared scale."
+            "Click a service to open its spans · the edge label is its call count · red means at least 2% errors · the red sparkline is the error-rate trend and the amber one the p95 trend, each on a shared scale."
         </p>
 
         live_refresh(topic: "map".to_string(), target: "sm-live".to_string(), toggle: "live-toggle".to_string(), cadence: 5000)

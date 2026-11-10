@@ -109,6 +109,9 @@ if not ok:
 
 body = wait_for("trace feed", "/traces", "/traces?trace=")
 assert "By service" in body
+assert "Overall p95 per bucket" in body, "latency trend card"
+assert "Span duration distribution" in body, "duration histogram"
+assert "sm-spark sm-lat" in body, "per-service p95 trend sparkline"
 trace = unesc(body).split("/traces?trace=")[1].split('"')[0]
 check("waterfall",      f"/traces?trace={trace}", "wfbar")
 check("waterfall tree", f"/traces?trace={trace}", "padding-left:")
@@ -205,7 +208,8 @@ assert "checkout" in smap, "service node missing"
 assert "/traces?service=" in smap, "node drill link missing"
 assert "No spans in this window" not in smap, "unexpected empty state"
 assert 'class="spark"' in smap, "node error-rate sparkline missing"
-print("PASS  service map (nodes + edge svg + sparkline)")
+assert "sm-lat" in smap and "#e8b04a" in smap, "node p95 latency sparkline missing"
+print("PASS  service map (nodes + edge svg + error/p95 sparklines)")
 assert 'id="sm-live"' in smap and "live-toggle" in smap, "auto-refresh mount missing"
 assert "LotelLive.sub" in smap and "/api/live?topic=" in smap and "setInterval" in smap, "live controller missing"
 print("PASS  service-map live refresh wiring (LotelLive + /api/live topic)")
