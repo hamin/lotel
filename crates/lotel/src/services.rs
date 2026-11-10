@@ -6,6 +6,10 @@
 //! is stable across reloads and unit-testable; edges are drawn in an SVG
 //! underlay (built as a string) and the nodes are positioned HTML anchors that
 //! deep-link into the traces explorer.
+//!
+//! The canvas is a shared component so both the page and the bare
+//! `/api/services` fragment render it identically; the page polls that fragment
+//! to refresh the map in place while data streams (see `MAP_JS`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -15,7 +19,7 @@ use topcoat::{
     Result,
     context::{Cx, context},
     router::{page, parse_query_params},
-    view::{BoxView, Unescaped, ViewExt, view},
+    view::{BoxView, Unescaped, View, ViewExt, component, view},
 };
 
 use crate::{
@@ -124,9 +128,9 @@ pub fn layout(stats: &[SvcStat], edges: &[SvcEdge]) -> (Vec<Laid>, f64, f64) {
     (laid, w, h)
 }
 
-/// A fully rendered node — all fields owned so the boxed view can move them in
+/// A fully rendered node — all fields owned so the view can move them in
 /// without borrowing any of the function's locals.
-struct NodeView {
+pub(crate) struct NodeView {
     name: String,
     href: String,
     title: String,
@@ -152,19 +156,28 @@ struct EdgePath {
     my: f64,
 }
 
-#[page]
-async fn services(cx: &Cx) -> Result<BoxView<'_>> {
-    let db = context::<Db>(cx);
-    let f = parse_query_params::<MapFilters>(cx).unwrap_or_default();
-    let range = if f.range.is_empty() {
-        "1h".to_string()
-    } else {
-        f.range.clone()
-    };
+/// Owned render input for the canvas + summary, computed from the store in one
+/// pass. Everything is owned, so both the page and the bare `/api/services`
+/// fragment can hand it to the shared `sm_map` component.
+pub(crate) struct LiveInput {
+    empty: bool,
+    svg: String,
+    nodes: Vec<NodeView>,
+    canvas_style: String,
+    services_n: String,
+    edges_n: String,
+    spans_n: String,
+    err_class: String,
+    err_text: String,
+    updated: String,
+}
 
-    let nodes = stats::service_stats(db, &range);
-    let edges = stats::service_edges(db, &range);
-    let (_, svc_series) = stats::error_series(db, &range);
+/// Query the store and precompute every owned piece the map needs. Shared by
+/// the page and the poll fragment so the two never drift.
+pub(crate) fn build_live(db: &Db, range: &str) -> LiveInput {
+    let nodes = stats::service_stats(db, range);
+    let edges = stats::service_edges(db, range);
+    let (_, svc_series) = stats::error_series(db, range);
     let rate_of = |t: i64, e: i64| if t == 0 { 0.0 } else { e as f64 / t as f64 };
     // Shared scale so node sparklines are comparable; floor keeps them visible.
     let max_rate = svc_series
@@ -180,8 +193,8 @@ async fn services(cx: &Cx) -> Result<BoxView<'_>> {
     let series_by_svc: HashMap<&str, &crate::stats::SvcSeries> =
         svc_series.iter().map(|s| (s.service.as_str(), s)).collect();
 
-    // Precompute all owned render data BEFORE the view, so nothing the boxed
-    // view captures borrows a local.
+    // Precompute all owned render data BEFORE the view, so nothing the view
+    // captures borrows a local.
     let drawn: Vec<EdgePath> = edges
         .iter()
         .filter_map(|e| {
@@ -243,13 +256,76 @@ async fn services(cx: &Cx) -> Result<BoxView<'_>> {
         })
         .collect();
 
-    let services_n = nodes.len().to_string();
-    let edges_n = edges.len().to_string();
     let total_spans: i64 = nodes.iter().map(|n| n.spans).sum();
     let total_errs: i64 = nodes.iter().map(|n| n.errs).sum();
-    let overall = stats::pct(rate_of(total_spans, total_errs));
-    let canvas_style = format!("width:{cw}px;height:{ch}px");
-    let has_nodes = !node_views.is_empty();
+    let (err_class, err_text) = if total_errs > 0 {
+        (
+            "badge error".to_string(),
+            format!("{} errors", stats::pct(rate_of(total_spans, total_errs))),
+        )
+    } else {
+        ("badge info".to_string(), "no errors".to_string())
+    };
+
+    LiveInput {
+        empty: node_views.is_empty(),
+        svg,
+        nodes: node_views,
+        canvas_style: format!("width:{cw}px;height:{ch}px"),
+        services_n: nodes.len().to_string(),
+        edges_n: edges.len().to_string(),
+        spans_n: total_spans.to_string(),
+        err_class,
+        err_text,
+        updated: format!("updated {}", chrono::Utc::now().format("%H:%M:%S")),
+    }
+}
+
+/// The map canvas (edge SVG + positioned nodes) and a live summary line.
+/// Rendered identically by the page and the `/api/services` poll fragment.
+#[component]
+pub(crate) async fn sm_map(cx: &Cx, input: LiveInput) -> Result<impl View> {
+    Ok(view! {
+        if input.empty {
+            <p class="muted">"No spans in this window — send OTLP traffic or widen the range."</p>
+        } else {
+            <div class="card sm-wrap">
+                <div class="sm-canvas" style=(input.canvas_style)>
+                    (Unescaped::new_unchecked(input.svg))
+                    for n in input.nodes {
+                        <a class="sm-node" href=(n.href) title=(n.title)
+                           style=(format!("left:{}px;top:{}px;width:{}px;height:{}px", n.x, n.y, NODE_W, NODE_H))>
+                            <div class="sm-head">
+                                <span class=(n.head_class)>"●"</span>
+                                <b>(n.name)</b>
+                            </div>
+                            <div class="sm-stats">
+                                (n.spans)" spans · p50 "(n.p50)" / p95 "(n.p95)" ms · "
+                                <span class=(n.err_class)>(n.err_text)</span>
+                            </div>
+                            <div class="sm-spark">(Unescaped::new_unchecked(n.spark))</div>
+                        </a>
+                    }
+                </div>
+            </div>
+            <p class="muted sm-updated">
+                (input.services_n)" services · "(input.edges_n)" edges · "(input.spans_n)" spans · "
+                <span class=(input.err_class)>(input.err_text)</span>" · "(input.updated)
+            </p>
+        }
+    })
+}
+
+#[page]
+async fn services(cx: &Cx) -> Result<BoxView<'_>> {
+    let db = context::<Db>(cx);
+    let f = parse_query_params::<MapFilters>(cx).unwrap_or_default();
+    let range = if f.range.is_empty() {
+        "1h".to_string()
+    } else {
+        f.range.clone()
+    };
+    let data = build_live(db, &range);
 
     Ok(view! {
         <h1>"Service map"</h1>
@@ -268,48 +344,50 @@ async fn services(cx: &Cx) -> Result<BoxView<'_>> {
                 </select>
             </label>
             <button type="submit">"Apply"</button>
-            <span class="tail">
-                (services_n)" services · "(edges_n)" edges · "
-                (total_spans.to_string())" spans · "
-                if total_errs > 0 {
-                    <span class="badge error">(overall)" errors"</span>
-                } else {
-                    <span class="badge info">"no errors"</span>
-                }
-            </span>
+            <label class="tail">
+                <input type="checkbox" id="live-toggle" checked="checked" />
+                "live"
+            </label>
         </form>
 
-        if !has_nodes {
-            <p class="muted">"No spans in this window — send OTLP traffic or widen the range."</p>
-        } else {
-            <div class="card sm-wrap">
-                <div class="sm-canvas" style=(canvas_style)>
-                    (Unescaped::new_unchecked(svg))
-                    for n in node_views {
-                        <a class="sm-node" href=(n.href) title=(n.title)
-                           style=(format!("left:{}px;top:{}px;width:{}px;height:{}px", n.x, n.y, NODE_W, NODE_H))>
-                            <div class="sm-head">
-                                <span class=(n.head_class)>"●"</span>
-                                <b>(n.name)</b>
-                            </div>
-                            <div class="sm-stats">
-                                (n.spans)" spans · p50 "(n.p50)" / p95 "(n.p95)" ms · "
-                                <span class=(n.err_class)>(n.err_text)</span>
-                            </div>
-                            <div class="sm-spark">(Unescaped::new_unchecked(n.spark))</div>
-                        </a>
-                    }
-                </div>
-            </div>
+        <div id="sm-live">
+            sm_map(input: data)
+        </div>
 
-            <h2>"Legend"</h2>
-            <p class="muted sm-legend">
-                "Click a service to open its spans · the edge label is its call count · red means at least 2% errors · the sparkline is the error-rate trend, shared scale."
-            </p>
-        }
+        <h2>"Legend"</h2>
+        <p class="muted sm-legend">
+            "Click a service to open its spans · the edge label is its call count · red means at least 2% errors · the sparkline is the error-rate trend, shared scale."
+        </p>
+
+        <script>(Unescaped::new_unchecked(MAP_JS))</script>
     }
     .boxed())
 }
+
+/// Light auto-refresh: while the toggle is on, re-fetch the bare map fragment
+/// and swap `#sm-live` in place — no navigation, and it pauses while the tab
+/// is hidden so a backgrounded page costs nothing.
+const MAP_JS: &str = r#"
+(function () {
+    var box = document.getElementById('sm-live');
+    var ctl = document.getElementById('live-toggle');
+    if (!box) return;
+    var timer = null;
+    function tick() {
+        if (document.hidden) return;
+        fetch('/api/services' + window.location.search)
+            .then(function (r) { return r.text(); })
+            .then(function (html) { box.innerHTML = html; })
+            .catch(function () {});
+    }
+    function sync() {
+        if (ctl && ctl.checked) { if (!timer) timer = setInterval(tick, 5000); }
+        else if (timer) { clearInterval(timer); timer = null; }
+    }
+    if (ctl) ctl.addEventListener('change', sync);
+    sync();
+})();
+"#;
 
 /// The SVG underlay: arrowhead markers plus one labelled cubic per edge.
 fn edges_svg(edges: &[EdgePath], w: f64, h: f64) -> String {

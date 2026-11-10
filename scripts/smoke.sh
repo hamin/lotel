@@ -184,6 +184,14 @@ assert "/traces?service=" in smap, "node drill link missing"
 assert "No spans in this window" not in smap, "unexpected empty state"
 assert 'class="spark"' in smap, "node error-rate sparkline missing"
 print("PASS  service map (nodes + edge svg + sparkline)")
+assert 'id="sm-live"' in smap and "live-toggle" in smap, "auto-refresh mount missing"
+assert "/api/services" in smap and "setInterval" in smap, "poller script missing"
+print("PASS  service-map auto-refresh wiring")
+
+_, sfrag = get("/api/services?range=all")
+assert "<!DOCTYPE" not in sfrag, "map fragment must render bare (no layout)"
+assert 'class="sm-node"' in sfrag and 'class="sm-edges"' in sfrag, "fragment missing canvas"
+print("PASS  service-map live fragment (bare)")
 
 # Dashboard card renders with or without recent data (fixtures are historical).
 _, home = get("/")
