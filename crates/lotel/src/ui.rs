@@ -48,6 +48,8 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 .badge.warn   { background: #2a2314; color: #e6c068; }
 .badge.error  { background: #2c1618; color: #f0858a; }
 .badge.fatal  { background: #3a0f14; color: #ff6b74; }
+.badge.hist   { background: #241b2e; color: #b07fc9; }
+.badge.exp    { background: #16282b; color: #6fb3b8; }
 .badge.other  { background: #1b212e; color: #aab4c5; }
 .filters {
     display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
@@ -107,6 +109,17 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 .svc3, .wfbar.svc3 { background: #b07fc9; } .svc-dot.svc3 { background: none; color: #b07fc9; }
 .svc4, .wfbar.svc4 { background: #c97f7f; } .svc-dot.svc4 { background: none; color: #c97f7f; }
 .svc5, .wfbar.svc5 { background: #6fb3b8; } .svc-dot.svc5 { background: none; color: #6fb3b8; }
+/* — histogram distribution — */
+.hist { font-size: 0.8rem; }
+.hrow { display: grid; grid-template-columns: 150px 1fr; gap: 0.6rem;
+        align-items: center; padding: 0.14rem 0; }
+.hlabel { color: #aab4c5; text-align: right; white-space: nowrap; }
+.htrack { position: relative; height: 1.05rem; background: #0b0f18;
+          border-radius: 3px; overflow: hidden; }
+.hbar { position: absolute; inset: 0 auto 0 0; min-width: 2px;
+        background: linear-gradient(90deg, #3f7d63, #7dd3a0); border-radius: 3px; }
+.hcount { position: absolute; top: 0; line-height: 1.05rem; padding-left: 0.35rem;
+          color: #d7dce5; font-size: 0.72rem; font-variant-numeric: tabular-nums; }
 "#;
 
 /// Sidebar nav: (label, path).

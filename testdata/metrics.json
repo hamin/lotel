@@ -34,6 +34,58 @@
           ]
         }
       ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "api-gateway"}}
+        ]
+      },
+      "scopeMetrics": [
+        {
+          "scope": {"name": "http.server"},
+          "metrics": [
+            {
+              "name": "http.request.duration",
+              "unit": "ms",
+              "histogram": {
+                "dataPoints": [
+                  {
+                    "timeUnixNano": "1762700000000000000",
+                    "count": "1000",
+                    "sum": 21500.0,
+                    "min": 1.0,
+                    "max": 480.0,
+                    "bucketCounts": ["120", "480", "300", "80", "20"],
+                    "explicitBounds": [5.0, 10.0, 50.0, 100.0]
+                  }
+                ],
+                "aggregationTemporality": 2
+              }
+            },
+            {
+              "name": "http.server.active",
+              "unit": "{requests}",
+              "exponentialHistogram": {
+                "dataPoints": [
+                  {
+                    "timeUnixNano": "1762700000000000000",
+                    "count": "500",
+                    "sum": 2500.0,
+                    "min": 0.05,
+                    "max": 32.0,
+                    "zeroCount": 40,
+                    "scale": 2,
+                    "positive": {"offset": 0, "bucketCounts": ["60", "140", "180", "80"]},
+                    "negative": {"offset": 0, "bucketCounts": ["0", "0"]}
+                  }
+                ],
+                "aggregationTemporality": 2
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

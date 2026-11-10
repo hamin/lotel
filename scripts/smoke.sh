@@ -104,6 +104,20 @@ d = json.loads(body)
 assert d.get("xs"), f"empty series: {body[:120]}"
 print("PASS  metric series  points:", len(d["xs"]))
 
+# Server-rendered distributions for the two histogram shapes.
+HG = "/metrics?shape=histogram&name=http.request.duration&service=api-gateway&chart=1"
+wait_for("histogram catalog", "/metrics", "http.request.duration")
+check("histogram bars",  HG, 'class="hbar"')
+check("histogram count", HG, ">480<")           # tallest bucket = 480
+check("histogram mean",  HG, "mean 21.5")       # sum/count = 21500/1000
+
+XG = "/metrics?shape=exp_histogram&name=http.server.active&service=api-gateway&chart=1"
+wait_for("exp histogram catalog", "/metrics", "http.server.active")
+check("exp bars",        XG, 'class="hbar"')
+check("exp edge",        XG, "0.841")           # 2^(2^-2) reconstruction: (0.841, 1]
+check("exp count",       XG, ">140<")
+check("exp zero bucket", XG, "40")              # zero_count
+
 check("storage ttl",    "/storage", "7d")
 check("storage segs",   "/storage", "Segments")
 
