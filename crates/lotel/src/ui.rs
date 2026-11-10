@@ -177,6 +177,38 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 .sqlbar button:hover { background: #22855a; }
 .qsql { margin-top: 0.9rem; }
 .qsql summary { cursor: pointer; color: #8a93a5; font-size: 0.8rem; }
+/* — explore: two-column results + facet sidebar + stats tooltip — */
+.qcols { display: grid; grid-template-columns: minmax(0, 1fr) 224px; gap: 1.2rem; align-items: start; }
+.qmain { min-width: 0; }
+.qfacets { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto;
+           padding-left: 1.2rem; border-left: 1px solid #1b212e; }
+.qfacets-head { font-size: 0.7rem; color: #7d8595; text-transform: uppercase;
+                letter-spacing: 0.1em; margin-bottom: 0.6rem; }
+.facet { margin-bottom: 0.9rem; }
+.fhead { display: flex; justify-content: space-between; align-items: baseline; font-size: 0.72rem;
+         color: #aab4c5; font-weight: 600; padding: 0.1rem 0.2rem; cursor: help; }
+.fkind { color: #5c6575; font-weight: 400; font-size: 0.66rem; }
+.fvals { margin-top: 0.2rem; }
+.fval { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center;
+        position: relative; padding: 0.13rem 0.35rem; border-radius: 5px; color: #aab4c5;
+        text-decoration: none; font-size: 0.75rem; }
+.fval:hover { background: #141a26; color: #eaf0fa; }
+.fvlab { position: relative; z-index: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fvcnt { position: relative; z-index: 1; color: #7d8595; font-variant-numeric: tabular-nums; }
+.fvbar { position: absolute; left: 0; top: 0; bottom: 0; z-index: 0; opacity: 0.55; border-radius: 5px;
+         background: linear-gradient(90deg, #24405f, #2f5a86); }
+.fcell { color: #9ecbff; text-decoration: none; cursor: pointer; }
+.fcell:hover { text-decoration: underline; }
+.qtable th[data-stat] { cursor: help; }
+.qtable th[data-stat]:hover { color: #d7dce5; }
+.qtip { position: absolute; background: #11151f; border: 1px solid #2b3548; color: #d7dce5;
+        padding: 0.28rem 0.5rem; border-radius: 6px; font-size: 0.72rem; z-index: 60;
+        pointer-events: none; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); white-space: nowrap; }
+@media (max-width: 900px) {
+    .qcols { grid-template-columns: 1fr; }
+    .qfacets { position: static; max-height: none; padding-left: 0; border-left: 0;
+               border-top: 1px solid #1b212e; padding-top: 0.9rem; }
+}
 "#;
 
 /// Sidebar nav: (label, path).

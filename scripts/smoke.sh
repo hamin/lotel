@@ -124,12 +124,26 @@ assert "json_extract_string" in ab and "Query error" not in ab, ab[:200]
 print("PASS  query attribute filter")
 
 _, sb = get("/query" + q(mode="sql", sql="SELECT count(*) AS n FROM otel.main.otlp_logs"))
-assert "<th>n</th>" in sb, sb[:200]
+assert "SELECT count(*) AS n" in sb and "Query error" not in sb, sb[:200]
 print("PASS  sql console")
 
 _, gb = get("/query" + q(mode="sql", sql="DELETE FROM otel.main.otlp_logs"))
 assert "got 'delete'" in gb, gb[:200]
 print("PASS  sql read-only guard")
+
+_, fpage = get("/query" + q(dataset="logs", range="all", measures='["count"]'))
+assert 'class="qfacets"' in fpage and 'class="fval"' in fpage, "facet sidebar missing"
+assert '"stats":' in fpage, "stats not embedded"
+print("PASS  facet sidebar + stats")
+
+_, cpage = get("/query" + q(dataset="logs", range="all", measures='["count"]',
+                filters='[{"col":"service_name","op":"=","val":"cart"}]'))
+assert "Query error" not in cpage and 'class="qfacets"' in cpage, cpage[:200]
+print("PASS  facet drill filters")
+
+_, tpage = get("/query" + q(dataset="traces", range="all", measures='["count"]', group='["trace_id"]'))
+assert 'class="fcell"' in tpage and "/traces?trace=" in tpage, tpage[:200]
+print("PASS  drill-through opens trace")
 
 # Server-rendered distributions for the two histogram shapes.
 HG = "/metrics?shape=histogram&name=http.request.duration&service=api-gateway&chart=1"

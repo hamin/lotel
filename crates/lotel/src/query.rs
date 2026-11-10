@@ -28,6 +28,16 @@ pub struct ColDef {
     pub kind: Kind,
     pub is_attr: bool,
     pub expr: &'static str,
+    /// Included in the facet sidebar (false for high-cardinality id columns).
+    pub facet: bool,
+}
+
+impl ColDef {
+    /// Opt out of faceting (ids, free-text message bodies, etc.).
+    const fn nf(mut self) -> Self {
+        self.facet = false;
+        self
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize)]
@@ -55,6 +65,7 @@ const fn c(key: &'static str, label: &'static str, kind: Kind, expr: &'static st
         kind,
         is_attr: false,
         expr,
+        facet: true,
     }
 }
 const fn a(key: &'static str, label: &'static str, expr: &'static str) -> ColDef {
@@ -64,6 +75,7 @@ const fn a(key: &'static str, label: &'static str, expr: &'static str) -> ColDef
         kind: Kind::Text,
         is_attr: true,
         expr,
+        facet: false,
     }
 }
 
@@ -86,7 +98,7 @@ pub const DATASETS: &[Dataset] = &[
             c("event_name", "Event", Kind::Text, "event_name"),
             c("scope_name", "Scope", Kind::Text, "scope_name"),
             c("body", "Body", Kind::Text, "body"),
-            c("trace_id", "Trace id", Kind::Text, "trace_id"),
+            c("trace_id", "Trace id", Kind::Text, "trace_id").nf(),
             a("log_attributes", "Log attribute", "log_attributes"),
             a(
                 "resource_attributes",
@@ -119,7 +131,7 @@ pub const DATASETS: &[Dataset] = &[
                 Kind::Text,
                 "status_status_message",
             ),
-            c("trace_id", "Trace id", Kind::Text, "trace_id"),
+            c("trace_id", "Trace id", Kind::Text, "trace_id").nf(),
             a("span_attributes", "Span attribute", "span_attributes"),
             a(
                 "resource_attributes",
@@ -489,14 +501,9 @@ fn inline(sql: &str, params: &[String]) -> String {
     out
 }
 
-/// Compile a builder query into count/table/chart SQL.
-pub fn compile(state: &QueryState) -> Plan {
-    let ds = match dataset(&state.dataset) {
-        Some(d) => d,
-        None => return fail("unknown dataset"),
-    };
-
-    // WHERE + shared params.
+/// Build the shared `WHERE …` clause and its bound parameters for a dataset,
+/// from the range + filter rows. Reused by the plan compiler and the facets.
+fn build_where(ds: &Dataset, state: &QueryState) -> Result<(String, Vec<String>), String> {
     let mut conds: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
     if let Some(cut) = cutoff_for(&state.range) {
@@ -507,10 +514,7 @@ pub fn compile(state: &QueryState) -> Plan {
         if f.col.is_empty() {
             continue;
         }
-        let r = match resolve_col(ds, &f.col) {
-            Some(r) => r,
-            None => return fail(&format!("unknown column '{}'", f.col)),
-        };
+        let r = resolve_col(ds, &f.col).ok_or_else(|| format!("unknown column '{}'", f.col))?;
         let op = f.op.as_str();
         let e = &r.expr;
         match op {
@@ -523,24 +527,39 @@ pub fn compile(state: &QueryState) -> Plan {
                 }
                 params.push(f.val.clone());
             }
-            "~" => conds.push(format!("{e} ILIKE '%' || ? || '%'")),
-            "!~" => conds.push(format!("{e} NOT ILIKE '%' || ? || '%'")),
+            "~" | "!~" => {
+                let like = if op == "~" { "ILIKE" } else { "NOT ILIKE" };
+                conds.push(format!("{e} {like} '%' || ? || '%'"));
+                params.push(f.val.clone());
+            }
             ">" | ">=" | "<" | "<=" => {
                 conds.push(format!("CAST({e} AS DOUBLE) {op} CAST(? AS DOUBLE)"));
                 params.push(f.val.clone());
             }
             "exists" => conds.push(format!("({e} IS NOT NULL AND CAST({e} AS VARCHAR) <> '')")),
             "nexists" => conds.push(format!("({e} IS NULL OR CAST({e} AS VARCHAR) = '')")),
-            _ => return fail(&format!("unknown operator '{}'", f.op)),
-        }
-        if matches!(op, "~" | "!~") {
-            params.push(f.val.clone());
+            _ => return Err(format!("unknown operator '{}'", f.op)),
         }
     }
     let where_sql = if conds.is_empty() {
         String::new()
     } else {
         format!(" WHERE {}", conds.join(" AND "))
+    };
+    Ok((where_sql, params))
+}
+
+/// Compile a builder query into count/table/chart SQL.
+pub fn compile(state: &QueryState) -> Plan {
+    let ds = match dataset(&state.dataset) {
+        Some(d) => d,
+        None => return fail("unknown dataset"),
+    };
+
+    // WHERE + shared params.
+    let (where_sql, params) = match build_where(ds, state) {
+        Ok(v) => v,
+        Err(e) => return fail(&e),
     };
 
     // Measures.
@@ -808,6 +827,166 @@ pub fn run(db: &Db, plan: &Plan) -> Outcome {
     }
 }
 
+/// One value in a facet: label, row count, bar width (0-100), and the
+/// click-through URL that toggles a `col = value` filter.
+#[derive(Serialize)]
+pub struct FacetItem {
+    pub v: String,
+    pub cnt: i64,
+    pub pct: i64,
+    pub href: String,
+}
+
+/// A faceted column: top values plus whole-column stats for the hover tooltip.
+#[derive(Serialize)]
+pub struct Facet {
+    pub key: String,
+    pub label: String,
+    pub kind: &'static str, // "num" | "text"
+    pub distinct: i64,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub items: Vec<FacetItem>,
+}
+
+/// Percent-encode a query-string value (unreserved set passes through).
+fn qenc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Truncate a facet/table label to `n` chars with an ellipsis.
+fn short(s: &str, n: usize) -> String {
+    let mut it = s.chars();
+    let head: String = it.by_ref().take(n).collect();
+    if it.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// Rebuild the `/query` URL for the current state with a different filter set.
+fn build_url(state: &QueryState, filters: &[Filter]) -> String {
+    let m = serde_json::to_string(&state.measures()).unwrap_or_else(|_| "[]".into());
+    let g = serde_json::to_string(&state.groups()).unwrap_or_else(|_| "[]".into());
+    let f = serde_json::to_string(filters).unwrap_or_else(|_| "[]".into());
+    let mut s = format!(
+        "/query?dataset={}&range={}",
+        qenc(&state.dataset),
+        qenc(&state.range)
+    );
+    if !state.bucket.is_empty() {
+        s.push_str(&format!("&bucket={}", qenc(&state.bucket)));
+    }
+    s.push_str(&format!(
+        "&measures={}&filters={}&group={}",
+        qenc(&m),
+        qenc(&f),
+        qenc(&g)
+    ));
+    s
+}
+
+/// URL that toggles a `col = val` equality filter (click again to remove).
+pub fn drill_url(state: &QueryState, col: &str, val: &str) -> String {
+    let mut fs = state.filters();
+    match fs
+        .iter()
+        .position(|x| x.col == col && x.op == "=" && x.val == val)
+    {
+        Some(p) => {
+            fs.remove(p);
+        }
+        None => fs.push(Filter {
+            col: col.into(),
+            op: "=".into(),
+            val: val.into(),
+        }),
+    }
+    build_url(state, &fs)
+}
+
+/// Compute facet columns for the current dataset + filters: top values and
+/// (per column) count-distinct and, for numerics, min/max. One query/column.
+pub fn facets(db: &Db, state: &QueryState) -> Vec<Facet> {
+    let ds = match dataset(&state.dataset) {
+        Some(d) => d,
+        None => return vec![],
+    };
+    let (where_sql, params) = match build_where(ds, state) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    let from = format!(" FROM otel.main.\"{}\"", ds.table);
+    let mut out = Vec::new();
+    for cd in ds.cols.iter().filter(|c| c.facet) {
+        let e = cd.expr;
+        let nonnull = if cd.kind == Kind::Num {
+            format!("{e} IS NOT NULL")
+        } else {
+            format!("({e} IS NOT NULL AND CAST({e} AS VARCHAR) <> '')")
+        };
+        let full_where = if where_sql.is_empty() {
+            format!(" WHERE {nonnull}")
+        } else {
+            format!("{where_sql} AND {nonnull}")
+        };
+        let inner = format!("SELECT {e} AS v, count(*) AS c{from}{full_where} GROUP BY 1");
+        let (stats, numeric) = if cd.kind == Kind::Num {
+            (", min(v) OVER () AS mn, max(v) OVER () AS mx", true)
+        } else {
+            ("", false)
+        };
+        let sql = format!(
+            "SELECT v, c, count(*) OVER () AS d{stats} FROM ({inner}) ORDER BY c DESC LIMIT 6"
+        );
+        let (_, rows) = match db.query_rows_with(&sql, &bound(&params)) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        let distinct = rows[0][2].parse().unwrap_or(0);
+        let (min, max) = if numeric {
+            (rows[0].get(3).cloned(), rows[0].get(4).cloned())
+        } else {
+            (None, None)
+        };
+        let cnts: Vec<i64> = rows.iter().map(|r| r[1].parse().unwrap_or(0)).collect();
+        let top = cnts.iter().max().copied().unwrap_or(0).max(1);
+        let items: Vec<FacetItem> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| FacetItem {
+                v: r[0].clone(),
+                cnt: cnts[i],
+                pct: (cnts[i] as f64 / top as f64 * 100.0).round() as i64,
+                href: drill_url(state, cd.key, &r[0]),
+            })
+            .collect();
+        out.push(Facet {
+            key: cd.key.to_string(),
+            label: cd.label.to_string(),
+            kind: if numeric { "num" } else { "text" },
+            distinct,
+            min,
+            max,
+            items,
+        });
+    }
+    out
+}
+
 /// Vendored charting library, shipped in the binary (same copy as metrics).
 const UPLOT_JS: &str = include_str!("../assets/vendor/uPlot.min.js");
 const UPLOT_CSS: &str = include_str!("../assets/vendor/uPlot.min.css");
@@ -834,12 +1013,75 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
     let measures_text = plan.measure_labels.join(" · ");
     let group_text = plan.group_keys.join(", ");
 
+    let ds = dataset(if s.dataset.is_empty() {
+        "logs"
+    } else {
+        &s.dataset
+    });
+    let grouped = !plan.group_keys.is_empty();
+    let ng = plan.group_keys.len();
+
+    // Facets + per-column stats (builder only): one windowed query per column.
+    let facets = if sql_mode { Vec::new() } else { facets(db, &s) };
+    let mut stats = serde_json::Map::new();
+    for f in &facets {
+        stats.insert(
+            f.key.clone(),
+            json!({ "kind": f.kind, "distinct": f.distinct, "min": f.min, "max": f.max }),
+        );
+    }
+
+    // Friendly headers (builder) + drill-through links on breakdown cells.
+    let head_cells: Vec<(String, Option<String>)> = if sql_mode {
+        res.columns.iter().map(|c| (c.clone(), None)).collect()
+    } else if grouped {
+        let mut h: Vec<(String, Option<String>)> = plan
+            .group_keys
+            .iter()
+            .map(|k| {
+                let label = ds
+                    .and_then(|d| resolve_col(d, k))
+                    .map(|r| r.label)
+                    .unwrap_or_else(|| k.clone());
+                (label, Some(k.clone()))
+            })
+            .collect();
+        h.extend(plan.measure_labels.iter().map(|m| (m.clone(), None)));
+        h
+    } else {
+        let mut h = vec![("time".to_string(), None)];
+        h.extend(plan.measure_labels.iter().map(|m| (m.clone(), None)));
+        h
+    };
+    let cells: Vec<Vec<(String, Option<String>)>> = res
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .map(|(ci, cell)| {
+                    if !sql_mode && grouped && ci < ng {
+                        let href = if plan.group_keys[ci] == "trace_id" {
+                            format!("/traces?trace={}", cell)
+                        } else {
+                            drill_url(&s, &plan.group_keys[ci], cell)
+                        };
+                        (cell.clone(), Some(href))
+                    } else {
+                        (cell.clone(), None)
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
     // State handed to the client builder so its controls mirror the URL.
     let seed = json!({
         "datasets": DATASETS,
         "operators": OPERATORS,
         "measureFns": MEASURE_FNS.iter().map(|(f,l,nc,nn)| json!({"fn":f,"label":l,"col":nc,"num":nn})).collect::<Vec<_>>(),
         "palette": PALETTE,
+        "stats": stats,
         "state": {
             "dataset": if s.dataset.is_empty() { "logs" } else { &s.dataset },
             "mode": if sql_mode { "sql" } else { "builder" },
@@ -881,48 +1123,79 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
         }
 
         if res.error.is_none() {
-            <div class="qstats">
-                <span class="qs"><b>(res.total.clone())</b>" rows"</span>
-                if !plan.group_keys.is_empty() {
-                    <span class="qs">"by "<b>(group_text.clone())</b></span>
-                }
-                if !plan.measure_labels.is_empty() {
-                    <span class="qs">(measures_text.clone())</span>
-                }
-            </div>
-
-            <div class="card"><div id="qchart" class="qchart"></div></div>
-
-            <div class="qtablewrap">
-                <table class="qtable">
-                    <thead>
-                        <tr>
-                            for col in &res.columns {
-                                <th>(col.clone())</th>
-                            }
-                        </tr>
-                    </thead>
-                    <tbody>
-                        for row in &res.rows {
-                            <tr>
-                                for cell in row {
-                                    <td>(cell.clone())</td>
-                                }
-                            </tr>
+            <div class="qcols">
+                <div class="qmain">
+                    <div class="qstats">
+                        <span class="qs"><b>(res.total.clone())</b>" rows"</span>
+                        if !plan.group_keys.is_empty() {
+                            <span class="qs">"by "<b>(group_text.clone())</b></span>
                         }
-                    </tbody>
-                </table>
-                if res.rows.is_empty() {
-                    <p class="muted qempty">"No rows match. Widen the time range or loosen a filter."</p>
+                        if !plan.measure_labels.is_empty() {
+                            <span class="qs">(measures_text.clone())</span>
+                        }
+                    </div>
+
+                    <div class="card"><div id="qchart" class="qchart"></div></div>
+
+                    <div class="qtablewrap">
+                        <table class="qtable">
+                            <thead>
+                                <tr>
+                                    for (label, dstat) in &head_cells {
+                                        <th data-stat=(dstat.clone().unwrap_or_default())>(label.clone())</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                for row in &cells {
+                                    <tr>
+                                        for (text, href) in row {
+                                            if let Some(h) = href {
+                                                <td><a class="fcell" href=(h.clone())>(text.clone())</a></td>
+                                            } else {
+                                                <td>(text.clone())</td>
+                                            }
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        if res.rows.is_empty() {
+                            <p class="muted qempty">"No rows match. Widen the time range or loosen a filter."</p>
+                        }
+                    </div>
+
+                    if !plan.display.is_empty() {
+                        <details class="qsql">
+                            <summary>"Generated SQL"</summary>
+                            <pre>(plan.display.clone())</pre>
+                        </details>
+                    }
+                </div>
+
+                if !sql_mode {
+                    <aside class="qfacets">
+                        <div class="qfacets-head">"Facets"</div>
+                        for f in &facets {
+                            <div class="facet">
+                                <div class="fhead" data-stat=(f.key.clone())>
+                                    <span class="fname">(f.label.clone())</span>
+                                    <span class="fkind">(if f.kind == "num" { "#" } else { "T" })</span>
+                                </div>
+                                <div class="fvals">
+                                    for it in &f.items {
+                                        <a class="fval" href=(it.href.clone())>
+                                            <span class="fvbar" style=(format!("width:{}%", it.pct))></span>
+                                            <span class="fvlab">(short(&it.v, 42))</span>
+                                            <span class="fvcnt">(it.cnt.to_string())</span>
+                                        </a>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </aside>
                 }
             </div>
-
-            if !plan.display.is_empty() {
-                <details class="qsql">
-                    <summary>"Generated SQL"</summary>
-                    <pre>(plan.display.clone())</pre>
-                </details>
-            }
         }
 
         <script>(Unescaped::new_unchecked(format!("window.LOTQL = {seed};")))
@@ -1084,6 +1357,25 @@ const QBLD_JS: &str = r#"
             })
             .catch(function(e){ chartEl.innerHTML='<span class="muted">chart error</span>'; });
     }
+
+    // ---- column stats tooltip (facet headers + result headers) ----
+    var tip = document.createElement('div');
+    tip.className = 'qtip'; tip.style.display = 'none';
+    document.body.appendChild(tip);
+    document.querySelectorAll('[data-stat]').forEach(function(el){
+        el.addEventListener('mouseenter', function(){
+            var k = el.getAttribute('data-stat'); if (!k) return;
+            var st = (L.stats || {})[k]; if (!st) return;
+            tip.textContent = st.kind === 'num'
+                ? (st.distinct + ' distinct · min ' + st.min + ' · max ' + st.max)
+                : (st.distinct + (st.distinct === 1 ? ' distinct value' : ' distinct values'));
+            var r = el.getBoundingClientRect();
+            tip.style.display = 'block';
+            tip.style.left = (r.left + window.scrollX) + 'px';
+            tip.style.top = (r.bottom + 6 + window.scrollY) + 'px';
+        });
+        el.addEventListener('mouseleave', function(){ tip.style.display = 'none'; });
+    });
 })();
 "#;
 
@@ -1197,5 +1489,52 @@ mod tests {
         assert!(is_read_only_sql("SELECT * FROM x UNION SELECT * FROM y; ").is_ok());
         assert!(is_read_only_sql("SELECT install_extension('x')").is_err());
         assert!(is_read_only_sql("").is_err());
+    }
+
+    #[test]
+    fn drill_url_adds_then_removes_filter() {
+        let s = state("logs", "", r#"["avg:value"]"#, r#"["service_name"]"#);
+        let added = drill_url(&s, "service_name", "cart");
+        assert!(added.contains("dataset=logs") && added.contains("range=24h"));
+        assert!(added.contains("cart"), "value should appear: {added}");
+        assert!(
+            added.contains("measures=") && added.contains("group="),
+            "keeps state: {added}"
+        );
+
+        let with = QueryState {
+            dataset: "logs".into(),
+            range: "24h".into(),
+            filters: r#"[{"col":"service_name","op":"=","val":"cart"}]"#.into(),
+            ..Default::default()
+        };
+        let removed = drill_url(&with, "service_name", "cart");
+        assert!(
+            removed.contains("filters=%5B%5D"),
+            "filter removed → empty list: {removed}"
+        );
+    }
+
+    #[test]
+    fn drill_url_distinguishes_values_by_col() {
+        let s = QueryState {
+            dataset: "logs".into(),
+            range: "24h".into(),
+            filters: r#"[{"col":"service_name","op":"=","val":"cart"}]"#.into(),
+            ..Default::default()
+        };
+        // same value, different column → not treated as a toggle-off
+        let added = drill_url(&s, "severity_text", "cart");
+        assert!(
+            added.contains("severity_text") && added.contains("service_name"),
+            "{added}"
+        );
+    }
+
+    #[test]
+    fn short_label_truncates() {
+        assert_eq!(short("hello", 10), "hello");
+        assert_eq!(short("hello world", 5), "hello\u{2026}");
+        assert_eq!(short("", 3), "");
     }
 }
