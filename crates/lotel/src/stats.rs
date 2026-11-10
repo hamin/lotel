@@ -8,6 +8,12 @@ use std::collections::BTreeMap;
 
 use crate::db::Db;
 
+use topcoat::{
+    Result,
+    context::Cx,
+    view::{Unescaped, View, component, view},
+};
+
 /// Lower cutoff timestamp for a range label, or `None` for all time.
 pub fn cutoff_for(range: &str) -> Option<String> {
     let secs: Option<i64> = match range {
@@ -313,6 +319,106 @@ pub fn service_edges(db: &Db, range: &str) -> Vec<SvcEdge> {
             p95_ms: r[4].parse().unwrap_or(0.0),
         })
         .collect()
+}
+
+/// A pre-rendered error-rate row (owned, so the boxed view can move it in).
+pub(crate) struct ErrRow {
+    service: String,
+    href: String,
+    spark: String,
+    rate: String,
+    hi: bool,
+}
+
+/// Owned render input for the dashboard error-rate card.
+pub(crate) struct ErrInput {
+    now_pct: String,
+    overall_pct: String,
+    empty: bool,
+    big_spark: String,
+    rows: Vec<ErrRow>,
+    foot: String,
+}
+
+/// Compute the dashboard error-rate card over `range` — window totals, the
+/// overall trend, and the top services. Shared by the home page and the
+/// `/api/live?topic=err` fragment so the two never drift.
+pub(crate) fn build_err(db: &Db, range: &str) -> ErrInput {
+    let (overall_rates, svc_rates) = error_series(db, range);
+    let rate = |t: i64, e: i64| if t == 0 { 0.0 } else { e as f64 / t as f64 };
+    let w_spans: i64 = svc_rates.iter().map(|s| s.total).sum();
+    let w_errs: i64 = svc_rates.iter().map(|s| s.errs).sum();
+    // Shared scale so every sparkline is comparable; floor keeps them visible.
+    let peak = overall_rates
+        .iter()
+        .chain(svc_rates.iter().flat_map(|s| s.rates.iter()))
+        .cloned()
+        .fold(0.0f64, f64::max)
+        .max(0.02);
+    let big_spark = spark_svg(&overall_rates, 280.0, 46.0, "#f0858a", peak);
+    let rows: Vec<ErrRow> = svc_rates
+        .iter()
+        .take(6)
+        .map(|s| {
+            let r = rate(s.total, s.errs);
+            ErrRow {
+                service: s.service.clone(),
+                href: format!("/traces?service={}", s.service),
+                spark: spark_svg(&s.rates, 120.0, 22.0, "#f0858a", peak),
+                rate: pct(r),
+                hi: r >= 0.02,
+            }
+        })
+        .collect();
+    ErrInput {
+        now_pct: pct(*overall_rates.last().unwrap_or(&0.0)),
+        overall_pct: pct(rate(w_spans, w_errs)),
+        empty: w_spans == 0,
+        big_spark,
+        rows,
+        foot: format!("{w_errs} errored of {w_spans} spans · sparklines share one scale"),
+    }
+}
+
+/// The dashboard error-rate card. Rendered identically by the home page and the
+/// `/api/live?topic=err` poll fragment.
+#[component]
+pub(crate) async fn err_card(cx: &Cx, input: ErrInput) -> Result<impl View> {
+    let ErrInput {
+        now_pct,
+        overall_pct,
+        empty,
+        big_spark,
+        rows,
+        foot,
+    } = input;
+    Ok(view! {
+        <div class="card errcard">
+            <div class="err-top">
+                <div class="err-now">
+                    <span class="err-big">(now_pct)</span>
+                    <span class="muted">"now · " (overall_pct)" over the window"</span>
+                </div>
+                <div class="err-spark">(Unescaped::new_unchecked(big_spark))</div>
+            </div>
+            if empty {
+                <p class="muted">"No spans in the last hour."</p>
+            } else {
+                <div class="err-svc-list">
+                    for e in rows {
+                        <a class="err-svc" href=(e.href)>
+                            <span class="err-svc-name">(e.service)</span>
+                            <span class="err-svc-spark">(Unescaped::new_unchecked(e.spark))</span>
+                            <span class=(if e.hi { "err-svc-rate hi" } else { "err-svc-rate" })>
+                                (e.rate)
+                            </span>
+                        </a>
+                    }
+                </div>
+                <p class="muted err-foot">(foot)</p>
+            }
+        </div>
+    })
 }
 
 #[cfg(test)]

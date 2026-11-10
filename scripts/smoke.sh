@@ -185,8 +185,14 @@ assert "No spans in this window" not in smap, "unexpected empty state"
 assert 'class="spark"' in smap, "node error-rate sparkline missing"
 print("PASS  service map (nodes + edge svg + sparkline)")
 assert 'id="sm-live"' in smap and "live-toggle" in smap, "auto-refresh mount missing"
-assert "/api/services" in smap and "setInterval" in smap, "poller script missing"
-print("PASS  service-map auto-refresh wiring")
+assert "LotelLive.sub" in smap and "/api/live?topic=" in smap and "setInterval" in smap, "live controller missing"
+print("PASS  service-map live refresh wiring (LotelLive + /api/live topic)")
+
+# The seam endpoint renders the same fragments bare, keyed by topic.
+_, lmap = get("/api/live?topic=map&range=all")
+assert "<!DOCTYPE" not in lmap, "live map topic must render bare"
+assert 'class="sm-node"' in lmap and 'class="sm-edges"' in lmap, "live map topic missing canvas"
+print("PASS  /api/live?topic=map (bare fragment)")
 
 _, sfrag = get("/api/services?range=all")
 assert "<!DOCTYPE" not in sfrag, "map fragment must render bare (no layout)"
@@ -196,7 +202,13 @@ print("PASS  service-map live fragment (bare)")
 # Dashboard card renders with or without recent data (fixtures are historical).
 _, home = get("/")
 assert "Error rate" in home and 'class="card errcard"' in home, "error-rate card missing"
-print("PASS  dashboard error-rate card")
+assert 'id="err-live"' in home and "err-live-toggle" in home and "LotelLive" in home, "dashboard live refresh missing"
+print("PASS  dashboard error-rate card + live refresh")
+
+_, lerr = get("/api/live?topic=err")
+assert "<!DOCTYPE" not in lerr, "live err topic must render bare"
+assert 'class="card errcard"' in lerr, "live err topic missing card"
+print("PASS  /api/live?topic=err (bare fragment)")
 
 check("storage ttl",    "/storage", "7d")
 check("storage segs",   "/storage", "Segments")

@@ -26,6 +26,7 @@ use crate::{
     db::Db,
     stats::{self, SvcEdge, SvcStat},
     traces::service_class,
+    ui::live_refresh,
 };
 
 #[derive(Debug, Default, Deserialize)]
@@ -359,35 +360,10 @@ async fn services(cx: &Cx) -> Result<BoxView<'_>> {
             "Click a service to open its spans · the edge label is its call count · red means at least 2% errors · the sparkline is the error-rate trend, shared scale."
         </p>
 
-        <script>(Unescaped::new_unchecked(MAP_JS))</script>
+        live_refresh(topic: "map".to_string(), target: "sm-live".to_string(), toggle: "live-toggle".to_string(), cadence: 5000)
     }
     .boxed())
 }
-
-/// Light auto-refresh: while the toggle is on, re-fetch the bare map fragment
-/// and swap `#sm-live` in place — no navigation, and it pauses while the tab
-/// is hidden so a backgrounded page costs nothing.
-const MAP_JS: &str = r#"
-(function () {
-    var box = document.getElementById('sm-live');
-    var ctl = document.getElementById('live-toggle');
-    if (!box) return;
-    var timer = null;
-    function tick() {
-        if (document.hidden) return;
-        fetch('/api/services' + window.location.search)
-            .then(function (r) { return r.text(); })
-            .then(function (html) { box.innerHTML = html; })
-            .catch(function () {});
-    }
-    function sync() {
-        if (ctl && ctl.checked) { if (!timer) timer = setInterval(tick, 5000); }
-        else if (timer) { clearInterval(timer); timer = null; }
-    }
-    if (ctl) ctl.addEventListener('change', sync);
-    sync();
-})();
-"#;
 
 /// The SVG underlay: arrowhead markers plus one labelled cubic per edge.
 fn edges_svg(edges: &[EdgePath], w: f64, h: f64) -> String {

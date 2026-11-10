@@ -1,5 +1,11 @@
 //! Shared UI chrome: the dark console stylesheet, nav, and small helpers.
 
+use topcoat::{
+    Result,
+    context::Cx,
+    view::{Unescaped, View, component, view},
+};
+
 /// Calm dark console look; shipped raw since CSS is not HTML.
 pub(crate) const CSS: &str = r#"
 :root { color-scheme: dark; }
@@ -299,4 +305,52 @@ mod tests {
         assert_eq!(sev_class(""), "other");
         assert_eq!(sev_class("banana"), "other");
     }
+}
+
+
+/// The live-refresh controller, embedded once per page that opts in. Polls a
+/// `/api/live?topic=` fragment and swaps the target's HTML — pausing when the
+/// tab is hidden and when the toggle is off. This is the single client half of
+/// the freshness seam: swap its `fetch` for an `EventSource` to go push-based
+/// (the SaaS shape) without touching any page.
+pub(crate) const LIVE_JS: &str = r#"
+window.LotelLive=(function(){
+  function sub(o){
+    var t=document.getElementById(o.target);
+    if(!t) return;
+    var ctl=o.toggle?document.getElementById(o.toggle):null;
+    var base='/api/live?topic='+encodeURIComponent(o.topic);
+    var ms=o.cadence||5000, timer=null;
+    function url(){ var s=window.location.search||''; return base+(s?'&'+s.replace(/^\?/,''):''); }
+    function tick(){
+      if(document.hidden) return;
+      fetch(url(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(h){t.innerHTML=h;}).catch(function(){});
+    }
+    function on(){ if(!timer){ t.setAttribute('data-live','on'); timer=setInterval(tick,ms); tick(); } }
+    function off(){ if(timer){ clearInterval(timer); timer=null; } t.setAttribute('data-live','off'); }
+    function sync(){ if(ctl && !ctl.checked) off(); else on(); }
+    if(ctl) ctl.addEventListener('change',sync);
+    sync();
+  }
+  return {sub:sub};
+})();
+"#;
+
+/// Opt a region into live refresh: loads the controller and subscribes `target`
+/// to `/api/live?topic=` while `toggle` is checked. Pauses when hidden.
+#[component]
+pub(crate) async fn live_refresh(
+    cx: &Cx,
+    topic: String,
+    target: String,
+    toggle: String,
+    cadence: u32,
+) -> Result<impl View> {
+    let boot = format!(
+        "LotelLive.sub({{topic:{topic:?},target:{target:?},toggle:{toggle:?},cadence:{cadence}}});"
+    );
+    Ok(view! {
+        <script>(Unescaped::new_unchecked(LIVE_JS))</script>
+        <script>(Unescaped::new_unchecked(boot))</script>
+    })
 }
