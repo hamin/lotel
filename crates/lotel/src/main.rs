@@ -5,6 +5,8 @@ mod ingest;
 mod logs;
 mod metrics;
 mod query;
+mod services;
+mod stats;
 mod storage;
 mod traces;
 mod ui;
@@ -21,6 +23,15 @@ use crate::{
     ingest::Ingest,
     ui::{CSS, nav_links},
 };
+
+/// A pre-rendered error-rate row (owned, so the boxed view can move it in).
+struct ErrRow {
+    service: String,
+    href: String,
+    spark: String,
+    rate: String,
+    hi: bool,
+}
 
 /// The chrome every page shares; declared at the crate root so it wraps all
 /// module-routed pages.
@@ -40,6 +51,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
         "/traces" => "Traces",
         "/metrics" => "Metrics",
         "/query" => "Explore",
+        "/services" => "Services",
         "/storage" => "Storage",
         _ => "",
     };
@@ -118,6 +130,35 @@ async fn home(cx: &Cx) -> Result<impl View> {
         .stats(db)
         .unwrap_or_else(|e| (vec!["error".into()], vec![vec![format!("{e}")]]));
 
+    // Error-rate trend over the last hour (traces), for the dashboard sparkline.
+    let (overall_rates, svc_rates) = stats::error_series(db, "1h");
+    let rate = |t: i64, e: i64| if t == 0 { 0.0 } else { e as f64 / t as f64 };
+    let w_spans: i64 = svc_rates.iter().map(|s| s.total).sum();
+    let w_errs: i64 = svc_rates.iter().map(|s| s.errs).sum();
+    let overall_rate = rate(w_spans, w_errs);
+    let cur_rate = overall_rates.last().copied().unwrap_or(0.0);
+    let peak = overall_rates
+        .iter()
+        .chain(svc_rates.iter().flat_map(|s| s.rates.iter()))
+        .cloned()
+        .fold(0.0f64, f64::max)
+        .max(0.02);
+    let big_spark = stats::spark_svg(&overall_rates, 280.0, 46.0, "#f0858a", peak);
+    let err_rows: Vec<ErrRow> = svc_rates
+        .iter()
+        .take(6)
+        .map(|s| {
+            let r = rate(s.total, s.errs);
+            ErrRow {
+                service: s.service.clone(),
+                href: format!("/traces?service={}", s.service),
+                spark: stats::spark_svg(&s.rates, 120.0, 22.0, "#f0858a", peak),
+                rate: stats::pct(r),
+                hi: r >= 0.02,
+            }
+        })
+        .collect();
+
     Ok(view! {
         <h1>"Dashboard"</h1>
         <p class="sub">
@@ -130,6 +171,35 @@ async fn home(cx: &Cx) -> Result<impl View> {
                     <div class="n">(row[1].clone())</div>
                     <div class="l">(row[0].clone())</div>
                 </div>
+            }
+        </div>
+
+        <h2>"Error rate — traces · last hour"</h2>
+        <div class="card errcard">
+            <div class="err-top">
+                <div class="err-now">
+                    <span class="err-big">(stats::pct(cur_rate))</span>
+                    <span class="muted">"now · " (stats::pct(overall_rate))" over the window"</span>
+                </div>
+                <div class="err-spark">(Unescaped::new_unchecked(big_spark))</div>
+            </div>
+            if w_spans == 0 {
+                <p class="muted">"No spans in the last hour."</p>
+            } else {
+                <div class="err-svc-list">
+                    for e in err_rows {
+                        <a class="err-svc" href=(e.href)>
+                            <span class="err-svc-name">(e.service)</span>
+                            <span class="err-svc-spark">(Unescaped::new_unchecked(e.spark))</span>
+                            <span class=(if e.hi { "err-svc-rate hi" } else { "err-svc-rate" })>
+                                (e.rate)
+                            </span>
+                        </a>
+                    }
+                </div>
+                <p class="muted err-foot">
+                    (w_errs.to_string())" errored of "(w_spans.to_string())" spans · sparklines share one scale"
+                </p>
             }
         </div>
 

@@ -176,6 +176,20 @@ check("exp edge",        XG, "0.841")           # 2^(2^-2) reconstruction: (0.84
 check("exp count",       XG, ">140<")
 check("exp zero bucket", XG, "40")              # zero_count
 
+# Service map + dashboard error-rate sparklines: both server-rendered SVG, no JS.
+smap = wait_for("service map", "/services?range=all", 'class="sm-node"')
+assert 'class="sm-edges"' in smap, "edge underlay svg missing"
+assert "checkout" in smap, "service node missing"
+assert "/traces?service=" in smap, "node drill link missing"
+assert "No spans in this window" not in smap, "unexpected empty state"
+assert 'class="spark"' in smap, "node error-rate sparkline missing"
+print("PASS  service map (nodes + edge svg + sparkline)")
+
+# Dashboard card renders with or without recent data (fixtures are historical).
+_, home = get("/")
+assert "Error rate" in home and 'class="card errcard"' in home, "error-rate card missing"
+print("PASS  dashboard error-rate card")
+
 check("storage ttl",    "/storage", "7d")
 check("storage segs",   "/storage", "Segments")
 

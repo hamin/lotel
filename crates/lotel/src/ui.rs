@@ -210,6 +210,41 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 .qtip { position: absolute; background: #11151f; border: 1px solid #2b3548; color: #d7dce5;
         padding: 0.28rem 0.5rem; border-radius: 6px; font-size: 0.72rem; z-index: 60;
         pointer-events: none; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); white-space: nowrap; }
+/* — dashboard: error-rate sparklines — */
+.spark { display: block; overflow: visible; }
+.spark-area { opacity: 0.16; }
+.spark-line { fill: none; stroke-width: 1.5px; stroke-linejoin: round; stroke-linecap: round; }
+.errcard .err-top { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.err-now { display: flex; flex-direction: column; }
+.err-big { font-size: 1.8rem; font-weight: 680; color: #f0858a; font-variant-numeric: tabular-nums; }
+.err-spark { flex: 1 1 240px; min-width: 200px; }
+.err-svc-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.3rem 1.4rem; margin-top: 0.7rem; }
+.err-svc { display: grid; grid-template-columns: 1fr 120px auto; gap: 0.6rem; align-items: center; text-decoration: none; color: inherit; padding: 0.12rem 0.2rem; border-radius: 5px; }
+.err-svc:hover { background: #141a26; }
+.err-svc-name { font-size: 0.82rem; color: #c8d2e2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.err-svc-rate { font-size: 0.78rem; color: #7d8595; font-variant-numeric: tabular-nums; text-align: right; min-width: 3.2rem; }
+.err-svc-rate.hi { color: #f0858a; }
+.err-foot { margin: 0.6rem 0 0; font-size: 0.75rem; }
+/* — service map — */
+.sm-wrap { overflow: auto; padding: 0.5rem; }
+.sm-canvas { position: relative; }
+.sm-edges { position: absolute; inset: 0; pointer-events: none; }
+.smedge { fill: none; stroke: #3a465c; stroke-opacity: 0.9; }
+.smedge.err { stroke: #b8525a; stroke-opacity: 0.95; }
+.arw { fill: #3a465c; } .arwe { fill: #b8525a; }
+.smlabel { fill: #8a93a5; font-size: 11px; font-variant-numeric: tabular-nums; paint-order: stroke; stroke: #0b0e14; stroke-width: 3px; stroke-linejoin: round; }
+.smlabel.err { fill: #f0a0a4; }
+.sm-node { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; gap: 0.15rem;
+           background: #0e1420; border: 1px solid #232b3b; border-radius: 8px; padding: 0.45rem 0.6rem;
+           text-decoration: none; color: inherit; box-shadow: 0 1px 0 #0b0e14; }
+.sm-node:hover { border-color: #3d68a8; background: #121a28; }
+.sm-head { display: flex; align-items: center; gap: 0.3rem; font-size: 0.82rem; }
+.sm-head b { color: #eaf0fa; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-stats { font-size: 0.7rem; color: #7d8595; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sm-err { color: #f0858a; } .sm-err.dim { color: #b98a8d; } .sm-ok { color: #57b98a; }
+.sm-spark { line-height: 0; }
+.sm-legend { font-size: 0.78rem; }
+
 @media (max-width: 900px) {
     .qcols { grid-template-columns: 1fr; }
     .qfacets { position: static; max-height: none; padding-left: 0; border-left: 0;
@@ -218,13 +253,14 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 "#;
 
 /// Sidebar nav: (label, path).
-pub(crate) fn nav_links() -> [(&'static str, &'static str); 6] {
+pub(crate) fn nav_links() -> [(&'static str, &'static str); 7] {
     [
         ("Dashboard", "/"),
         ("Logs", "/logs"),
         ("Traces", "/traces"),
         ("Metrics", "/metrics"),
         ("Explore", "/query"),
+        ("Services", "/services"),
         ("Storage", "/storage"),
     ]
 }

@@ -51,7 +51,7 @@ fn kind_label(kind: i64) -> &'static str {
 }
 
 /// Palette index for a service, stable across requests.
-fn service_class(service: &str) -> &'static str {
+pub(crate) fn service_class(service: &str) -> &'static str {
     const CLASSES: [&str; 6] = ["svc0", "svc1", "svc2", "svc3", "svc4", "svc5"];
     let h: u64 = service
         .bytes()
