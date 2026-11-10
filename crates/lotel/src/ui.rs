@@ -251,6 +251,29 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 .sm-spark { line-height: 0; }
 .sm-legend { font-size: 0.78rem; }
 
+.facets { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 0.2rem 0 1.1rem; }
+.facet { background: #0e1420; border: 1px solid #1b2334; border-radius: 10px; padding: 0.6rem 0.75rem; }
+.facet h3 { margin: 0 0 0.45rem; font-size: 0.68rem; letter-spacing: 0.09em; text-transform: uppercase; color: #7d8595; }
+.facet-row { display: grid; grid-template-columns: minmax(70px, 130px) 1fr 44px; gap: 0.5rem;
+             align-items: center; padding: 0.18rem 0.3rem; border-radius: 6px;
+             color: inherit; text-decoration: none; font-size: 0.78rem; }
+.facet-row:hover { background: #141b2c; }
+.facet-row.on { background: #16203a; outline: 1px solid #2b3a55; }
+.facet-k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.facet-bar { height: 8px; background: #10182a; border-radius: 4px; overflow: hidden; }
+.facet-bar i { display: block; height: 100%; background: linear-gradient(90deg, #3d68a8, #6ea3e8); }
+.facet-n { text-align: right; color: #7d8595; font-variant-numeric: tabular-nums; }
+.ranked { margin: 0.2rem 0 1rem; }
+.ranked-head { display: flex; gap: 0.6rem; align-items: baseline; margin-bottom: 0.4rem; }
+.ranked-title { font-weight: 600; color: #eaf0fa; }
+.ranked-row { display: grid; grid-template-columns: 150px 46px 62px 110px 1fr; gap: 0.55rem;
+              align-items: baseline; padding: 0.22rem 0.2rem; border-top: 1px solid #151b28;
+              color: inherit; text-decoration: none; font-size: 0.8rem; }
+.ranked-row:hover { background: #121a28; }
+.ranked-time { font-size: 0.72rem; }
+.badge.score { background: #17233b; color: #9db9ff; font-size: 0.66rem; }
+.ranked-svc { color: #aab4c5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 @media (max-width: 900px) {
     .qcols { grid-template-columns: 1fr; }
     .qfacets { position: static; max-height: none; padding-left: 0; border-left: 0;

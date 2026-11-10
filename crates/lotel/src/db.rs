@@ -19,6 +19,12 @@ use crate::config::Config;
 const CAPPED_EXTENSION: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/extensions/capped.duckdb_extension"));
 
+/// BM25 full-text indexes over sealed segments (capped_fts). Embedded so
+/// search works on a machine with no DuckDB extension cache; capped's own
+/// sidecar build LOADs fts and finds this one already loaded.
+const FTS_EXTENSION: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/extensions/fts.duckdb_extension"));
+
 /// SQL string literal with single quotes escaped.
 pub(crate) fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
@@ -59,6 +65,11 @@ impl Db {
             .map_err(|e| {
                 anyhow::anyhow!("LOAD capped from {} failed: {e}", capped_path.display())
             })?;
+        let fts_path = ext_dir.join("fts.duckdb_extension");
+        conn.execute_batch(&format!("LOAD {};", quote(&fts_path.to_string_lossy())))
+            .map_err(|e| {
+                anyhow::anyhow!("LOAD fts from {} failed: {e}", fts_path.display())
+            })?;
         let capped_version: String = conn.query_row("SELECT capped_version()", [], |r| r.get(0))?;
 
         let store = cfg.data_dir.join("store");
@@ -89,12 +100,13 @@ impl Db {
     /// override directory as-is).
     fn materialize_extensions(cfg: &Config) -> anyhow::Result<PathBuf> {
         if let Some(dir) = &cfg.extension_dir {
-            let path = dir.join("capped.duckdb_extension");
-            if !path.exists() {
-                anyhow::bail!(
-                    "LOTEL_EXTENSION_DIR set but no capped.duckdb_extension in {}",
-                    dir.display()
-                );
+            for name in ["capped.duckdb_extension", "fts.duckdb_extension"] {
+                if !dir.join(name).exists() {
+                    anyhow::bail!(
+                        "LOTEL_EXTENSION_DIR set but no {name} in {}",
+                        dir.display()
+                    );
+                }
             }
             return Ok(dir.clone());
         }
@@ -102,6 +114,7 @@ impl Db {
         fs::create_dir_all(&dir)?;
         // Rewrite every boot: cheap (tens of MB) and always in sync with the binary.
         fs::write(dir.join("capped.duckdb_extension"), CAPPED_EXTENSION)?;
+        fs::write(dir.join("fts.duckdb_extension"), FTS_EXTENSION)?;
         Ok(dir)
     }
 

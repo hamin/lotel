@@ -36,7 +36,7 @@ done
 sleep 3
 
 python3 - <<'PY'
-import json, sys, time, urllib.request
+import json, sys, time, urllib.request, urllib.parse
 
 B = "http://127.0.0.1:18080"
 
@@ -84,6 +84,28 @@ check("fragment bare",  "/api/logs", "<tr>")
 
 status, body = get("/api/logs")
 assert "<!DOCTYPE" not in body, "fragment endpoint must not carry the layout"
+
+check("log facets",     "/logs", 'class="facets"')
+check("facet bars",     "/logs", "facet-n")
+check("facet active",   "/logs?severity=ERROR", "facet-row on")
+
+# BM25 best matches: force a seal through the read-only SQL console (sidecar
+# index builds inside it), then poll for ranked hits from the sealed segments.
+seal_sql = urllib.parse.quote("SELECT * FROM capped_seal('otel', 'otlp_logs')")
+rb = ""
+for _ in range(30):
+    try:
+        get(f"/query?mode=sql&sql={seal_sql}")
+    except Exception:
+        pass
+    _, rb = get("/logs?q=gateway")
+    if "badge score" in rb:
+        break
+    time.sleep(1)
+ok = "Best matches (BM25)" in rb and "badge score" in rb and "gateway timeout" in rb
+print(("PASS" if ok else "FAIL"), "BM25 best matches (ranked hits from sealed segments)")
+if not ok:
+    fails += 1
 
 body = wait_for("trace feed", "/traces", "/traces?trace=")
 assert "By service" in body

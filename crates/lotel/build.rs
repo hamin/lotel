@@ -9,7 +9,7 @@ fn main() {
     // Re-run when the extension blobs appear/disappear/change.
     println!("cargo:rerun-if-changed=extensions");
     println!("cargo:rerun-if-changed=build.rs");
-    for name in ["capped.duckdb_extension", "otlp.duckdb_extension"] {
+    for name in ["capped.duckdb_extension", "otlp.duckdb_extension", "fts.duckdb_extension"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions").join(name);
         if !path.exists() {
             fs::create_dir_all(path.parent().unwrap()).unwrap();

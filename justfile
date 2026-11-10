@@ -2,6 +2,7 @@
 
 CAPPED_EXT := "../capped/shell/build/release/extension/capped/capped.duckdb_extension"
 OTLP_EXT := "~/.duckdb/extensions/v1.5.6/osx_arm64/otlp.duckdb_extension"
+FTS_EXT := "~/.duckdb/extensions/v1.5.6/osx_arm64/fts.duckdb_extension"
 DEST := "crates/lotel/extensions"
 
 # Copy the prebuilt extensions into the app for embedding.
@@ -11,6 +12,7 @@ fetch-extensions:
     mkdir -p {{DEST}}
     cp {{CAPPED_EXT}} {{DEST}}/capped.duckdb_extension
     cp {{OTLP_EXT}} {{DEST}}/otlp.duckdb_extension
+    cp {{FTS_EXT}} {{DEST}}/fts.duckdb_extension
 
 # Full release build (fetches the extension first)
 build: fetch-extensions
