@@ -736,8 +736,9 @@ thead th { font-family: var(--font-body); font-weight: 500; font-size: var(--tex
 tbody td { padding: var(--space-xs) var(--space-sm) var(--space-xs) 0;
   border-bottom: var(--rule-hair) solid var(--color-rule-2); color: var(--color-ink-2); }
 tbody:has(a) tr { position: relative; }
+
 tbody:has(a) tr:hover td { background: var(--color-paper-2);
-  box-shadow: inset 3px 0 0 var(--color-accent); }
+  color: var(--color-ink); border-bottom-color: var(--color-accent); }
 .mono, .trace-link.mono { font-family: var(--font-outlier); font-variant-numeric: tabular-nums;
   font-size: var(--text-sm); }
 a.trace-link { color: var(--color-ink); text-decoration: none;
