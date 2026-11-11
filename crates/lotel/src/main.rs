@@ -6,6 +6,7 @@ mod logs;
 mod metrics;
 mod query;
 mod services;
+mod skin;
 mod stats;
 mod storage;
 mod traces;
@@ -14,6 +15,7 @@ mod ui;
 use topcoat::{
     Result,
     context::{Cx, context},
+    cookie::{Cookie, CookieLayer, Cookies, SameSite, cookies, time},
     router::{Slot, layout, module_router, page},
     view::{BoxView, Unescaped, View, ViewExt, view},
 };
@@ -21,7 +23,7 @@ use topcoat::{
 use crate::{
     db::Db,
     ingest::Ingest,
-    ui::{CSS, live_refresh, nav_links},
+    ui::{CSS, SKIN_COOKIE, live_refresh, nav_links, parse_skin, query_has_skin, theme_panel},
 };
 
 use crate::stats::{build_err, err_card};
@@ -39,6 +41,30 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
         return Ok(view! { (slot) }.boxed());
     }
 
+    // The three theme switches: query beats the cookie, the cookie beats the
+    // defaults, and a deep link both re-renders and sticks (the cookie is
+    // rewritten so the next plain navigation keeps the look).
+    let query = topcoat::router::request::uri(cx)
+        .query()
+        .unwrap_or("")
+        .to_owned();
+    let jar = cookies(cx);
+    let cookie = jar.get(SKIN_COOKIE).map(|c| c.value().to_owned());
+    let skin = parse_skin(cookie.as_deref(), &query);
+    if query_has_skin(&query) {
+        jar.add(
+            Cookie::build((
+                SKIN_COOKIE,
+                format!("{}:{}:{}", skin.pal, skin.scheme, skin.font),
+            ))
+            .path("/")
+            .max_age(time::Duration::days(365))
+            .same_site(SameSite::Lax)
+            .http_only(true)
+            .build(),
+        );
+    }
+
     let active: &'static str = match path.as_str() {
         "/" => "Dashboard",
         "/logs" => "Logs",
@@ -52,7 +78,10 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
 
     Ok(view! {
         <!DOCTYPE html>
-        <html>
+        <html lang="en"
+              data-pal=(skin.pal.to_string())
+              data-scheme=(skin.scheme.to_string())
+              data-font=(skin.font.to_string())>
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -62,7 +91,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
             <body>
                 <div class="layout">
                     <nav>
-                        <p class="brand">"lotel" <span class="dot">"●"</span></p>
+                        <p class="brand">"lotel"</p>
                         for (label, href) in nav_links() {
                             <a href=(href)
                                if label == active {
@@ -73,7 +102,15 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
                             </a>
                         }
                     </nav>
-                    <main>(slot)</main>
+                    <main>
+                        theme_panel(
+                            pal: skin.pal.to_string(),
+                            scheme: skin.scheme.to_string(),
+                            font: skin.font.to_string(),
+                            query: query,
+                        )
+                        (slot)
+                    </main>
                 </div>
             </body>
         </html>
@@ -93,11 +130,22 @@ async fn main() -> anyhow::Result<()> {
         db.capped_version,
         db.data_dir_display()
     );
-    println!("lotel: OTLP on {} (bearer token: {})", ing.listen_uri, ing.token);
+    println!(
+        "lotel: OTLP on {} (bearer token: {})",
+        ing.listen_uri, ing.token
+    );
     println!("lotel: UI on http://{}:{}", cfg.host, cfg.port);
 
     let listener = tokio::net::TcpListener::bind((cfg.host.as_str(), cfg.port)).await?;
-    topcoat::serve(listener, module_router!().with(db).with(ing).build()).await?;
+    topcoat::serve(
+        listener,
+        module_router!()
+            .with(db)
+            .with(ing)
+            .layer(CookieLayer::new())
+            .build(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -116,9 +164,7 @@ async fn home(cx: &Cx) -> Result<impl View> {
         )
         .unwrap_or_else(|e| (vec!["error".into()], vec![vec![format!("{e}")]]));
     let store = db
-        .query_rows(
-            "SELECT table_name, segments, sealed, rows, bytes FROM capped_tables('otel')",
-        )
+        .query_rows("SELECT table_name, segments, sealed, rows, bytes FROM capped_tables('otel')")
         .unwrap_or_else(|e| (vec!["error".into()], vec![vec![format!("{e}")]]));
     let otlp = ing
         .stats(db)

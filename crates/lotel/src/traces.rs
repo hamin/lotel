@@ -262,7 +262,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
 
     // Latency analytics over the whole store (the feed has no range filter):
     // an overall p95 trend, a per-service trend column, and a duration
-    // histogram. One shared amber scale keeps every sparkline comparable.
+    // histogram. One shared scale in the series hue keeps every sparkline comparable.
     let (overall_p95, lat_series) = stats::latency_series(db, "all");
     let max_p95 = lat_series
         .iter()
@@ -278,14 +278,14 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
             lat_series
                 .iter()
                 .find(|s| s.service == key)
-                .map(|s| stats::spark_svg(&s.p95s, 130.0, 22.0, "#e8b04a", max_p95))
+                .map(|s| stats::spark_svg(&s.p95s, 130.0, 22.0, "var(--color-accent-2)", max_p95))
                 .unwrap_or_default()
         })
         .collect();
     let overall_spark = if overall_p95.is_empty() {
         String::new()
     } else {
-        stats::spark_svg(&overall_p95, 560.0, 44.0, "#e8b04a", max_p95)
+        stats::spark_svg(&overall_p95, 560.0, 44.0, "var(--color-accent-2)", max_p95)
     };
 
     let dist = db
@@ -328,7 +328,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
                     <p class="muted">"No spans in the store yet."</p>
                 } else {
                     (Unescaped::new_unchecked(overall_spark))
-                    <p class="lat-cap">(stats::interval_for("all"))" buckets · amber, one shared scale across all sparklines on this page"</p>
+                    <p class="lat-cap">(stats::interval_for("all"))" buckets · the series hue, one shared scale across all sparklines on this page"</p>
                 }
             </div>
             <div>

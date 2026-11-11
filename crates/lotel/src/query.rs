@@ -293,7 +293,9 @@ pub struct Filter {
 /// as JSON in single params so arbitrary values survive round-tripping.
 #[derive(Debug, Default, Deserialize)]
 pub struct QueryState {
-    #[serde(default)]
+    // a visit with no dataset (a fresh /query, or the chart fragment's empty
+    // search) means the builder's visible default: Logs
+    #[serde(default = "default_dataset")]
     pub dataset: String,
     #[serde(default)]
     pub mode: String, // "" | builder | sql
@@ -321,6 +323,10 @@ fn from_json<T: serde::de::DeserializeOwned>(s: &str) -> Vec<T> {
     } else {
         serde_json::from_str(s).unwrap_or_default()
     }
+}
+
+fn default_dataset() -> String {
+    "logs".into()
 }
 
 impl QueryState {
@@ -1067,7 +1073,13 @@ pub(crate) const PALETTE: [&str; 10] = [
 #[page]
 async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
     let db = context::<Db>(cx);
-    let s = parse_query_params::<QueryState>(cx).unwrap_or_default();
+    let mut s = parse_query_params::<QueryState>(cx).unwrap_or_default();
+    // A fresh visit carries no dataset; the builder's select shows Logs, so
+    // the compiler must agree rather than fail the first screen with
+    // "unknown dataset".
+    if s.dataset.is_empty() {
+        s.dataset = "logs".into();
+    }
     let sql_mode = s.is_sql();
 
     // Pick the result tab. SQL console wins; else honour ?tab=, defaulting to
@@ -1478,18 +1490,25 @@ const QBLD_JS: &str = r#"
                 if (d.error) { chartEl.innerHTML='<span class="muted">'+d.error+'</span>'; return; }
                 if (!d.xs || !d.xs.length) { chartEl.innerHTML='<span class="muted">no data to chart</span>'; return; }
                 var data=[d.xs].concat(d.series.map(function(s){return s.data;}));
-                var series=[{label:d.time?'time':''}].concat(d.series.map(function(s){ return d.stacked
-                    ? {label:s.label, stroke:s.color, fill:s.color+'33', width:0, type:'bars', stacked:true}
-                    : {label:s.label, stroke:s.color, fill:s.color+'1f', width:1.5}; }));
+                // colors come from the live skin, not hardcoded hex: the
+                // series ladder mirrors the service-dot ramp so a service
+                // reads the same in table, waterfall, and chart. The seeded
+                // console hex stays as the fallback if a token is missing.
+                function tok(n,fb){try{var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();if(v)return v;}catch(e){}return fb;}
+                var RAMP=['--color-accent-2','--color-ink-2','--color-muted','--color-muted-2','--color-accent','--color-ink'];
+                var showPt=function(u,si){var el=document.createElement('div');el.className='u-cursor-pt';el.style.background=u.series[si].stroke||tok('--color-accent-2','#4f8cc9');return el;};
+                var series=[{label:d.time?'time':''}].concat(d.series.map(function(s,i){ var c=tok(RAMP[i%RAMP.length],s.color); return d.stacked
+                    ? {label:s.label, stroke:c, fill:c+'33', width:0, type:'bars', stacked:true}
+                    : {label:s.label, stroke:c, fill:c+'1f', width:1.5}; }));
                 new uPlot({
                     width: Math.max(chartEl.clientWidth,320), height:260, padding:[6,6,0,0],
                     scales:{ x:{ time: !!d.time } },
                     series: series,
-                    axes:[ {stroke:'#8a93a5',grid:{stroke:'#1b212e'}}, {stroke:'#8a93a5',grid:{stroke:'#1b212e'}} ],
-                    cursor:{points:{show:d.stacked?false:true}}
+                    axes:[ {stroke:tok('--color-muted','#8a93a5'),grid:{stroke:tok('--color-rule-2','#1b212e'),width:1}}, {stroke:tok('--color-muted','#8a93a5'),grid:{stroke:tok('--color-rule-2','#1b212e'),width:1},size:58} ],
+                    cursor:{points:{show:d.stacked?false:showPt}}
                 }, data, chartEl);
             })
-            .catch(function(e){ chartEl.innerHTML='<span class="muted">chart error</span>'; });
+            .catch(function(e){ chartEl.innerHTML='<span class="muted">chart error: '+((e&&e.message)||e)+'</span>'; });
     }
 
     // ---- column stats tooltip (facet headers + result headers) ----

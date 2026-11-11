@@ -246,11 +246,11 @@ pub(crate) fn build_live(db: &Db, range: &str) -> LiveInput {
             };
             let spark = series_by_svc
                 .get(l.name.as_str())
-                .map(|s| stats::spark_svg(&s.rates, 152.0, 26.0, "#f0858a", max_rate))
+                .map(|s| stats::spark_svg(&s.rates, 152.0, 26.0, "var(--color-bad)", max_rate))
                 .unwrap_or_default();
             let lat = lat_by_svc
                 .get(l.name.as_str())
-                .map(|s| stats::spark_svg(&s.p95s, 152.0, 16.0, "#e8b04a", max_p95))
+                .map(|s| stats::spark_svg(&s.p95s, 152.0, 16.0, "var(--color-accent-2)", max_p95))
                 .unwrap_or_default();
             NodeView {
                 name: l.name.clone(),
@@ -374,7 +374,7 @@ async fn services(cx: &Cx) -> Result<BoxView<'_>> {
 
         <h2>"Legend"</h2>
         <p class="muted sm-legend">
-            "Click a service to open its spans · the edge label is its call count · red means at least 2% errors · the red sparkline is the error-rate trend and the amber one the p95 trend, each on a shared scale."
+            "Click a service to open its spans · the edge label is its call count · red means at least 2% errors · the error-rate trend rides red, the p95 trend the series hue, each on a shared scale."
         </p>
 
         live_refresh(topic: "map".to_string(), target: "sm-live".to_string(), toggle: "live-toggle".to_string(), cadence: 5000)

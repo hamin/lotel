@@ -330,6 +330,10 @@ async fn chart<'a>(
         .then(function (r) {{ return r.json(); }})
         .then(function (d) {{
             if (!d.xs || !d.xs.length) {{ el.textContent = 'no points'; return; }}
+            // the line and its grid read the live skin's tokens; the old
+            // console hex stays as the fallback if a token is missing
+            var tok = function (n, fb) {{ try {{ var v = getComputedStyle(document.documentElement).getPropertyValue(n).trim(); if (v) return v; }} catch (e) {{}} return fb; }};
+            var SC = tok('--color-accent-2', '#7dd3a0');
             new uPlot({{
                 width: Math.max(el.clientWidth, 320),
                 height: 280,
@@ -337,11 +341,11 @@ async fn chart<'a>(
                 scales: {{ x: {{ time: true }} }},
                 series: [
                     {{ label: 'time' }},
-                    {{ label: P.label, stroke: '#7dd3a0', fill: 'rgba(125, 211, 160, 0.10)', width: 1.5 }}
+                    {{ label: P.label, stroke: SC, fill: SC + '1a', width: 1.5 }}
                 ],
                 axes: [
-                    {{ stroke: '#8a93a5', grid: {{ stroke: '#1b212e' }} }},
-                    {{ stroke: '#8a93a5', grid: {{ stroke: '#1b212e' }} }}
+                    {{ stroke: tok('--color-muted', '#8a93a5'), grid: {{ stroke: tok('--color-rule-2', '#1b212e'), width: 1 }} }},
+                    {{ stroke: tok('--color-muted', '#8a93a5'), grid: {{ stroke: tok('--color-rule-2', '#1b212e'), width: 1 }}, size: 58 }}
                 ],
                 cursor: {{ points: {{ show: false }} }}
             }}, [d.xs, d.ys], el);

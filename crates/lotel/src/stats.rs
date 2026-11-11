@@ -110,8 +110,8 @@ pub fn spark_svg(values: &[f64], w: f64, h: f64, color: &str, max: f64) -> Strin
     let area = format!("{line} L{lx:.2},{h:.2} L{fx:.2},{h:.2} Z");
     format!(
         "<svg class=\"spark\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" \
-         preserveAspectRatio=\"none\"><path class=\"spark-area\" d=\"{area}\" fill=\"{color}\"/> \
-         <path class=\"spark-line\" d=\"{line}\" stroke=\"{color}\"/></svg>"
+         preserveAspectRatio=\"none\"><path class=\"spark-area\" d=\"{area}\" style=\"fill:{color}\"/> \
+         <path class=\"spark-line\" d=\"{line}\" style=\"stroke:{color}\"/></svg>"
     )
 }
 
@@ -442,7 +442,7 @@ pub(crate) fn build_err(db: &Db, range: &str) -> ErrInput {
         .cloned()
         .fold(0.0f64, f64::max)
         .max(0.02);
-    let big_spark = spark_svg(&overall_rates, 280.0, 46.0, "#f0858a", peak);
+    let big_spark = spark_svg(&overall_rates, 280.0, 46.0, "var(--color-bad)", peak);
     let rows: Vec<ErrRow> = svc_rates
         .iter()
         .take(6)
@@ -451,7 +451,7 @@ pub(crate) fn build_err(db: &Db, range: &str) -> ErrInput {
             ErrRow {
                 service: s.service.clone(),
                 href: format!("/traces?service={}", s.service),
-                spark: spark_svg(&s.rates, 120.0, 22.0, "#f0858a", peak),
+                spark: spark_svg(&s.rates, 120.0, 22.0, "var(--color-bad)", peak),
                 rate: pct(r),
                 hi: r >= 0.02,
             }
@@ -545,9 +545,9 @@ mod tests {
 
     #[test]
     fn sparkline_emits_area_and_line() {
-        let s = spark_svg(&[0.1, 0.4, 0.2], 120.0, 30.0, "#f0858a", 0.5);
+        let s = spark_svg(&[0.1, 0.4, 0.2], 120.0, 30.0, "var(--color-bad)", 0.5);
         assert!(s.contains("spark-area"));
         assert!(s.contains("spark-line"));
-        assert!(s.contains("#f0858a"));
+        assert!(s.contains("var(--color-bad)"));
     }
 }
