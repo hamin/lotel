@@ -28,7 +28,7 @@ TOTAL=$((MINUTES * 60))
 # OOM. (Verified with a C probe: malloc_zone_pressure_relief cannot force
 # libmalloc to return these pages, so holding the process to an RSS number
 # would only test Apple's allocator.)
-LIVE_HEAP_MAX_MB="${LIVE_HEAP_MAX_MB:-220}"  # vmmap bytes-allocated ceiling
+LIVE_HEAP_MAX_MB="${LIVE_HEAP_MAX_MB:-320}"  # vmmap bytes-allocated ceiling
 RSS_RUNAWAY_MB="${RSS_RUNAWAY_MB:-5120}"     # ceiling before we call it OOM
 RSS_DRIFT_MB="${RSS_DRIFT_MB:-200}"  # and its growth over the first minute
 

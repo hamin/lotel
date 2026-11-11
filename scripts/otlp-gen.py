@@ -276,7 +276,8 @@ def post(token: str, path: str, payload):
             _conn.request("POST", path, body=body, headers=headers)
             r = _conn.getresponse()
             r.read()
-            if r.status != 200:
+            # OTLP receivers answer 200 or 202 (Accepted); both are success.
+            if not 200 <= r.status < 300:
                 sys.stderr.write("  ! %s -> HTTP %d\n" % (path, r.status))
                 return False
             return True
