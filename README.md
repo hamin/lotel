@@ -109,7 +109,9 @@ Soak and stress are deliberately **local**, not CI: they run on their own
 ports beside a dev server, and a 10-minute soak on a shared runner buys
 nothing a nightly laptop run doesn't. The DuckDB/extension side has its own
 memory gate: `cd ../capped/shell && GEN=ninja make asan` builds Release with
-AddressSanitizer and runs the whole sqllogictest suite inside it.
+AddressSanitizer and runs the whole sqllogictest suite inside it. Full
+reference — gates, tunables, results, and the macOS allocator investigation —
+in [`docs/load-testing.md`](docs/load-testing.md).
 
 One honest caveat, measured rather than guessed: on macOS, RSS after a
 traffic flood reads high (gigabytes) while the *live heap* is ~40 MB —
