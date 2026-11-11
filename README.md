@@ -142,19 +142,15 @@ tenants across processes rather than running thousands of listeners in one.
 
 ## Status & roadmap
 
-Done: OTLP ingest → capped store, dashboard, logs explorer with live tail,
-trace waterfall, metric charts, storage view, BM25 search, latency
-analytics, service map sparklines, and the local test ladder (smoke / stress / soak).
+Shipped through M17 + the certified skin (M18-pre): OTLP ingest → capped
+store, dashboard, logs explorer with live tail and facets + BM25, trace
+waterfall, metric charts, latency analytics (p95 trends, duration
+histogram), service map with sparklines, storage view, theme/skin panel,
+and the local test ladder (smoke / stress / soak / tenant-proof).
 
-Next: histogram/exp-histogram charts, multi-tenant control plane (attach +
-serve per tenant, Postgres registry, token→port routing) building on
-`scripts/tenant-proof.sh`, `install.sh` + Docker images with per-platform
-extension bundles.
-
-Later / optional: a native Rust OTLP receiver only if a tenant needs
-cross-catalog transactions or the extension dependency becomes a liability —
-the extension-based ingest already handles the multi-tenant case, so this is
-no longer on the critical path.
+M18 is release engineering (`docs/M18-release-plan.md`); M19 (public
+release automation), M20 (multi-tenant control plane) and the backlog are
+in [docs/roadmap.md](docs/roadmap.md).
 
 ## License
 
