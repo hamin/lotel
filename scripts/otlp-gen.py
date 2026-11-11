@@ -31,7 +31,15 @@ import time
 import urllib.error
 import urllib.request
 
-OTLP = "http://127.0.0.1:4318"
+OTLP = os.environ.get("LOTEL_OTLP_URL", "http://127.0.0.1:4318")
+import http.client
+import urllib.parse
+
+# One keep-alive connection for every POST, the way a real OTLP SDK sends.
+# (The soak's 4 GB RSS scare traced to per-request churn inside the otlp
+# extension that libmalloc then refused to give back — connection count
+# wasn't the driver, but pooling is what a real exporter does anyway.)
+_host, _port = urllib.parse.urlparse(OTLP).hostname, urllib.parse.urlparse(OTLP).port
 UI = "http://127.0.0.1:8080"
 NS = 1_000_000_000  # nanos per second
 
@@ -251,24 +259,38 @@ def make_metrics(now: int, err: bool):
 
 
 # ————————————————————————————————————————————————————————— transport ———
+_conn = None
+
+
 def post(token: str, path: str, payload):
+    global _conn
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        OTLP + path, data=body, method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + token,
-                 "User-Agent": "lotel-otlp-gen/1.0"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
+    headers = {"Content-Type": "application/json",
+               "Authorization": "Bearer " + token,
+               "User-Agent": "lotel-otlp-gen/1.0",
+               "Connection": "keep-alive"}
+    for attempt in (1, 2):  # an idle keep-alive drop is normal: reconnect once
+        try:
+            if _conn is None:
+                _conn = http.client.HTTPConnection(_host, _port, timeout=5)
+            _conn.request("POST", path, body=body, headers=headers)
+            r = _conn.getresponse()
             r.read()
-        return True
-    except urllib.error.HTTPError as e:
-        sys.stderr.write("  ! %s %s -> HTTP %d: %s\n" % (path, "", e.code, e.read()[:120]))
-        return False
-    except Exception as e:  # noqa: BLE001 - demo tool, surface and continue
-        sys.stderr.write("  ! %s -> %s\n" % (path, e))
-        return False
+            if r.status != 200:
+                sys.stderr.write("  ! %s -> HTTP %d\n" % (path, r.status))
+                return False
+            return True
+        except Exception as e:  # noqa: BLE001 - demo tool, surface and continue
+            if _conn is not None:
+                try:
+                    _conn.close()
+                except Exception:
+                    pass
+                _conn = None
+            if attempt == 2:
+                sys.stderr.write("  ! %s -> %s\n" % (path, e))
+                return False
+    return False
 
 
 def emit(token: str, ts_ns: int):
@@ -338,6 +360,7 @@ def main():
         base = now_ns()
         for i in range(n, 0, -1):
             emit(token, base - i * step * NS)
+            time.sleep(0.05)  # pace like an exporter, not like a flood
         print("  backfilled %d bursts" % n)
 
     if a.once:

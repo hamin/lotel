@@ -43,3 +43,15 @@ smoke: fetch-extensions
 # and TTLs, same-catalog guard. Needs the real capped + otlp extensions.
 tenant-proof:
     ./scripts/tenant-proof.sh
+
+# Soak (M17, local by design): sustained ingest + UI polling with a watchdog
+# asserting no panics, no wedges, bounded RSS/fds, and caps held.
+#   SOAK_MINUTES=60 RATE=50 just soak
+soak:
+    ./scripts/soak.sh
+
+# Stress (M17, local by design): burst ingest + concurrent read storm, then
+# re-verify every surface. Zero failures is the bar.
+#   STRESS_MINUTES=2 CONC=8 just stress
+stress:
+    ./scripts/stress.sh

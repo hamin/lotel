@@ -291,6 +291,13 @@ pre { background: #11151f; border: 1px solid #1b212e; border-radius: 6px;
 }
 "#;
 
+/// One cell of a DB row, rendered safely even when the row is a query-failure
+/// placeholder: those carry a single wide cell, not `arity` of them, and
+/// indexing past the end took pages down at 500 (the M17 stress finding).
+pub(crate) fn cell(row: &[String], i: usize) -> String {
+    row.get(i).cloned().unwrap_or_default()
+}
+
 /// Sidebar nav: (label, path).
 pub(crate) fn nav_links() -> [(&'static str, &'static str); 7] {
     [

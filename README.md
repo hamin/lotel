@@ -85,13 +85,38 @@ views; the live tail and charts poll small bare fragment/JSON endpoints.
 just fetch-extensions   # copies capped + otlp extension files in for embedding
 cargo build --release   # target/release/lotel
 cargo test              # unit tests (pure logic; no extensions needed)
-./scripts/smoke.sh      # boots the binary, ingests testdata/, checks every page
+just smoke              # boots the binary, ingests testdata/, checks every page
+just stress             # 30s storm: concurrent ingest + every endpoint, p95 gates
+just soak               # 10 min sustained: watchdog over all pages, leak/fd/heap gates
 ```
 
 `just fetch-extensions` expects the sibling `capped` shell built
 (`cd ../capped/shell && GEN=ninja make release`) and the community `otlp`
 extension installed for the pinned DuckDB version. Both are then
 `include_bytes!`-embedded, so the shipped binary needs nothing at runtime.
+
+## The test ladder
+
+| gate | command | what it proves |
+| --- | --- | --- |
+| units | `cargo test` | query builders, facet/latency logic, pool concurrency |
+| smoke | `just smoke` | every page renders, ingest + caps + search work end to end |
+| stress | `just stress` | 12 threads x 30s storm: zero failures, p95 under budget, no panics |
+| soak | `just soak` | 10 min sustained ingest: live heap bounded, no fd/thread growth, caps held |
+| tenants | `scripts/tenant-proof.sh` | per-tenant isolation: catalogs, tokens, TTLs |
+
+Soak and stress are deliberately **local**, not CI: they run on their own
+ports beside a dev server, and a 10-minute soak on a shared runner buys
+nothing a nightly laptop run doesn't. The DuckDB/extension side has its own
+memory gate: `cd ../capped/shell && GEN=ninja make asan` builds Release with
+AddressSanitizer and runs the whole sqllogictest suite inside it.
+
+One honest caveat, measured rather than guessed: on macOS, RSS after a
+traffic flood reads high (gigabytes) while the *live heap* is ~40 MB —
+libmalloc retains freed pages and `malloc_zone_pressure_relief` cannot force
+them back (verified with a C probe). That is allocator policy, not lotel
+holding data, so the soak gates the live heap (vmmap bytes-allocated) plus
+RSS drift, instead of pretending an RSS ceiling is meaningful there.
 
 ## Multi-tenancy (hosted flavor)
 
@@ -116,7 +141,8 @@ tenants across processes rather than running thousands of listeners in one.
 ## Status & roadmap
 
 Done: OTLP ingest → capped store, dashboard, logs explorer with live tail,
-trace waterfall, metric charts, storage view.
+trace waterfall, metric charts, storage view, BM25 search, latency
+analytics, service map sparklines, and the local test ladder (smoke / stress / soak).
 
 Next: histogram/exp-histogram charts, multi-tenant control plane (attach +
 serve per tenant, Postgres registry, token→port routing) building on

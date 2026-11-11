@@ -1,8 +1,15 @@
 //! Embedded DuckDB: loads the bundled `capped` extension, attaches the store.
 //!
 //! DuckDB runs in-process via duckdb-rs (statically linked, version-pinned to
-//! match the bundled extensions). A single `Connection` is shared behind a
-//! mutex; `ATTACH` and `LOAD` are instance-wide so every reader sees them.
+//! match the bundled extensions). Reads come from a small pool of connections
+//! over one shared instance — DuckDB's concurrency model is "many connections,
+//! one database", and serializing every page behind a single mutexed conn made
+//! the stress script's readers queue behind each other (p95 seconds, not ms).
+//! Peers come from `Connection::try_clone` (duckdb_connect on the same
+//! handle). Re-opening the same *path* is not the way: it builds a separate
+//! instance that never saw the `ATTACH otel` — every query there binder-errors
+//! on the missing catalog, which is exactly how the first pool broke.
+//! `LOAD` and `ATTACH` live on the instance, so every clone sees them.
 
 use std::{
     fs,
@@ -30,8 +37,15 @@ pub(crate) fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// Connections kept warm for concurrent readers. Pages issue several grouped
+/// queries per render; a handful of peers lets that fan out instead of queue.
+const MAX_CONNS: usize = 8;
+
 pub struct Db {
-    conn: Arc<Mutex<Connection>>,
+    /// The connection that opened the instance and ran LOAD/ATTACH. Never
+    /// used for queries — it is the seed every pooled peer is cloned from.
+    seed: Arc<Mutex<Connection>>,
+    pool: Arc<Mutex<Vec<Connection>>>,
     pub data_dir: PathBuf,
     /// Where the loadable extension files live (data dir or the dev override).
     pub ext_dir: PathBuf,
@@ -41,7 +55,8 @@ pub struct Db {
 impl Clone for Db {
     fn clone(&self) -> Self {
         Self {
-            conn: self.conn.clone(),
+            seed: self.seed.clone(),
+            pool: self.pool.clone(),
             data_dir: self.data_dir.clone(),
             ext_dir: self.ext_dir.clone(),
             capped_version: self.capped_version.clone(),
@@ -70,6 +85,18 @@ impl Db {
             .map_err(|e| {
                 anyhow::anyhow!("LOAD fts from {} failed: {e}", fts_path.display())
             })?;
+        // DuckDB defaults to 80% of RAM and one thread per core. For a tool
+        // that should stay invisible on a laptop, the buffer pool gets a
+        // leash. (This caps DuckDB's own accounting, not third-party
+        // extension allocations — a warmup flood inside the otlp extension
+        // can still push RSS well past this, though it frees again.)
+        let limit = std::env::var("LOTEL_MEMORY_LIMIT").unwrap_or_else(|_| "1GB".into());
+        conn.execute_batch(&format!("SET memory_limit = {};", quote(&limit)))
+            .map_err(|e| anyhow::anyhow!("SET memory_limit='{limit}' failed: {e}"))?;
+        if let Ok(threads) = std::env::var("LOTEL_THREADS") {
+            conn.execute_batch(&format!("SET threads = {};", quote(&threads)))
+                .map_err(|e| anyhow::anyhow!("SET threads='{threads}' failed: {e}"))?;
+        }
         let capped_version: String = conn.query_row("SELECT capped_version()", [], |r| r.get(0))?;
 
         let store = cfg.data_dir.join("store");
@@ -78,22 +105,48 @@ impl Db {
             quote(&store.to_string_lossy())
         ))?;
 
-                Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+        Ok(Self {
+            seed: Arc::new(Mutex::new(conn)),
+            pool: Arc::new(Mutex::new(Vec::new())),
             data_dir: cfg.data_dir.clone(),
             ext_dir,
             capped_version,
         })
     }
 
-    /// Run a closure against the shared connection. Tolerates mutex poisoning:
-    /// a panic in one request must not take the whole UI down.
+    /// A connection from the pool: reuse a warm peer or clone a new one off
+    /// the seed — same instance, same attached catalogs.
+    fn checkout(&self) -> anyhow::Result<Connection> {
+        if let Some(conn) = self.pool.lock().unwrap_or_else(|e| e.into_inner()).pop() {
+            return Ok(conn);
+        }
+        let seed = self.seed.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(seed.try_clone()?)
+    }
+
+    /// Return a connection to the pool. One that just hit an error stays out:
+    /// cheap insurance against handing a half-poisoned statement to the next
+    /// page, since duckdb-rs connections are cheap to recreate. Tolerates
+    /// mutex poisoning: a panic in one request must not take the UI down.
+    fn give_back(&self, conn: Connection, healthy: bool) {
+        if !healthy {
+            return;
+        }
+        let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
+        if pool.len() < MAX_CONNS {
+            pool.push(conn);
+        }
+    }
+
+    /// Run a closure against a pooled connection.
     pub(crate) fn with_conn<T>(
         &self,
         f: impl FnOnce(&Connection) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        f(&conn)
+        let conn = self.checkout()?;
+        let out = f(&conn);
+        self.give_back(conn, out.is_ok());
+        out
     }
 
     /// Write the embedded extension files next to the data dir (or use the dev
@@ -130,7 +183,18 @@ impl Db {
         sql: &str,
         params: &[&dyn duckdb::ToSql],
     ) -> anyhow::Result<(Vec<String>, Vec<Vec<String>>)> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.checkout()?;
+        let out = self.run_rows(&conn, sql, params);
+        self.give_back(conn, out.is_ok());
+        out
+    }
+
+    fn run_rows(
+        &self,
+        conn: &Connection,
+        sql: &str,
+        params: &[&dyn duckdb::ToSql],
+    ) -> anyhow::Result<(Vec<String>, Vec<Vec<String>>)> {
         let wrapped = format!("SELECT COLUMNS(*)::VARCHAR FROM ({sql})");
 
         // duckdb-rs only exposes column metadata after a *successful* execution:
@@ -139,7 +203,10 @@ impl Db {
         // names of a statement that never ran panics inside duckdb-rs
         // ("The statement was not executed yet"), and a panicking request would
         // poison the shared connection for every page behind it.
-        let mut probe = conn.prepare(&wrapped)?;
+        let mut probe = conn.prepare(&wrapped).map_err(|e| {
+            eprintln!("lotel: prepare failed: {e}\n  sql: {wrapped}");
+            e
+        })?;
         match probe.query_row(params, |_| Ok(())) {
             Ok(()) | Err(duckdb::Error::QueryReturnedNoRows) => {}
             Err(e) => {
@@ -157,7 +224,10 @@ impl Db {
             .collect();
         drop(probe);
 
-        let mut stmt = conn.prepare(&wrapped)?;
+        let mut stmt = conn.prepare(&wrapped).map_err(|e| {
+            eprintln!("lotel: re-prepare failed: {e}\n  sql: {wrapped}");
+            e
+        })?;
         let rows = stmt.query_map(params, |row| {
             (0..columns.len())
                 .map(|i| row.get::<_, Option<String>>(i).map(|v| v.unwrap_or_default()))
@@ -241,6 +311,31 @@ mod tests {
             .expect("later queries must still work");
         assert_eq!(cols, ["answer"]);
         assert_eq!(rows, vec![vec!["42".to_string()]]);
+        let _ = fs::remove_dir_all(&db.data_dir);
+    }
+
+    /// The stress script found this: eight concurrent readers against one
+    /// mutexed connection queued behind each other (p95 seconds). Peers must
+    /// run at once and all see the attached store — the first pool re-opened
+    /// the same *path*, which built separate instances where `otel` was
+    /// missing and every real query binder-errored. A literal-only query
+    /// cannot see that; this one must read through otel.main.
+    #[test]
+    fn concurrent_readers_share_the_attached_store() {
+        let db = temp_db("concurrent-readers");
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let d = db.clone();
+                std::thread::spawn(move || {
+                    d.query_rows("SELECT count(*) AS n FROM capped_tables('otel')")
+                })
+            })
+            .collect();
+        for h in handles {
+            let (cols, rows) = h.join().expect("reader thread").expect("reader query");
+            assert_eq!(cols, ["n"]);
+            assert_eq!(rows.len(), 1, "one count row");
+        }
         let _ = fs::remove_dir_all(&db.data_dir);
     }
 

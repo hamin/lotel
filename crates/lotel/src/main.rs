@@ -25,6 +25,7 @@ use crate::{
 };
 
 use crate::stats::{build_err, err_card};
+use crate::ui::cell;
 
 /// The chrome every page shares; declared at the crate root so it wraps all
 /// module-routed pages.
@@ -134,8 +135,8 @@ async fn home(cx: &Cx) -> Result<impl View> {
         <div class="grid">
             for row in &counts.1 {
                 <div class="card stat">
-                    <div class="n">(row[1].clone())</div>
-                    <div class="l">(row[0].clone())</div>
+                    <div class="n">(cell(row, 1))</div>
+                    <div class="l">(cell(row, 0))</div>
                 </div>
             }
         </div>

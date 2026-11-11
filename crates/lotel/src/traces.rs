@@ -9,7 +9,11 @@ use topcoat::{
     view::{BoxView, Unescaped, View, ViewExt, component, view},
 };
 
-use crate::{db::Db, stats};
+use crate::{
+    db::Db,
+    stats,
+    ui::cell,
+};
 
 #[derive(Debug, Default, Deserialize)]
 pub struct TraceFilters {
@@ -350,11 +354,11 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
             <tbody>
                 for (row, trend) in services.1.iter().zip(&trends) {
                     <tr>
-                        <td>(row[0].clone())</td>
-                        <td>(row[1].clone())</td>
-                        <td>(row[2].clone())</td>
-                        <td>(row[3].clone())</td>
-                        <td>(row[4].clone())</td>
+                        <td>(cell(row, 0))</td>
+                        <td>(cell(row, 1))</td>
+                        <td>(cell(row, 2))</td>
+                        <td>(cell(row, 3))</td>
+                        <td>(cell(row, 4))</td>
                         <td class="sm-spark sm-lat">(Unescaped::new_unchecked(trend.clone()))</td>
                     </tr>
                 }
@@ -369,12 +373,12 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
             <tbody>
                 for row in &spans.1 {
                     <tr>
-                        <td class="muted">(row[0].clone())</td>
-                        <td>(row[1].clone())</td>
-                        <td class="logbody">(row[2].clone())</td>
-                        <td>(row[3].clone())</td>
-                        <td>(row[4].clone())</td>
-                        <td><a class="trace-link mono" href=(format!("/traces?trace={}", row[5]))>(row[6].clone())</a></td>
+                        <td class="muted">(cell(row, 0))</td>
+                        <td>(cell(row, 1))</td>
+                        <td class="logbody">(cell(row, 2))</td>
+                        <td>(cell(row, 3))</td>
+                        <td>(cell(row, 4))</td>
+                        <td><a class="trace-link mono" href=(format!("/traces?trace={}", cell(row, 5)))>(cell(row, 6))</a></td>
                     </tr>
                 }
             </tbody>
