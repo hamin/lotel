@@ -208,7 +208,7 @@ assert "checkout" in smap, "service node missing"
 assert "/traces?service=" in smap, "node drill link missing"
 assert "No spans in this window" not in smap, "unexpected empty state"
 assert 'class="spark"' in smap, "node error-rate sparkline missing"
-assert "sm-lat" in smap and "#e8b04a" in smap, "node p95 latency sparkline missing"
+assert "sm-lat" in smap and 'class="sm-spark sm-lat"><svg class="spark"' in smap and any('class="spark-line"' in d for d in smap.split('class="sm-spark sm-lat">')[1:]), "node p95 latency sparkline missing"
 print("PASS  service map (nodes + edge svg + error/p95 sparklines)")
 assert 'id="sm-live"' in smap and "live-toggle" in smap, "auto-refresh mount missing"
 assert "LotelLive.sub" in smap and "/api/live?topic=" in smap and "setInterval" in smap, "live controller missing"

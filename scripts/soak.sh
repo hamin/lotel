@@ -232,6 +232,17 @@ try:
 except Exception as e:
     check(False, "store caps queryable", str(e))
 
+# write amplification over the soak (fragments plan T10, informational):
+# bytes_written / bytes from capped_tables('otel'), summed over all tables
+try:
+    q = urllib.parse.quote("SELECT coalesce(sum(bytes), 0), coalesce(sum(bytes_written), 0) FROM capped_tables('otel')")
+    with urllib.request.urlopen(f"http://127.0.0.1:18090/query?mode=sql&sql={q}", timeout=10) as r:
+        page = r.read().decode()
+    sealed, written = [int(x) for x in re.findall(r"<td[^>]*>([^<]*)</td>", page)[:2]]
+    print(f"      amplification: bytes_written {written/1e6:.1f} MB / bytes {sealed/1e6:.1f} MB = {written/max(sealed, 1):.2f}x")
+except Exception as e:
+    check(False, "store amplification queryable", str(e))
+
 # still fully alive after the whole run
 try:
     for p in ("/logs", "/traces", "/services"):
