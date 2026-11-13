@@ -1,8 +1,8 @@
 # lotel task runner
 
 CAPPED_EXT := "../capped/shell/build/release/extension/capped/capped.duckdb_extension"
-OTLP_EXT := "~/.duckdb/extensions/v1.5.6/osx_arm64/otlp.duckdb_extension"
-FTS_EXT := "~/.duckdb/extensions/v1.5.6/osx_arm64/fts.duckdb_extension"
+OTLP_EXT := "~/.duckdb/extensions/v2.0.0/osx_arm64/otlp.duckdb_extension"
+FTS_EXT := "~/.duckdb/extensions/v2.0.0/osx_arm64/fts.duckdb_extension"
 DEST := "crates/lotel/extensions"
 
 # Copy the prebuilt extensions into the app for embedding.
