@@ -67,6 +67,35 @@ materialized to `<data>/extensions/` at boot:
 The UI is [Topcoat](https://github.com/tokio-rs/topcoat) server-rendered
 views; the live tail and charts poll small bare fragment/JSON endpoints.
 
+## UI & theming
+
+The settings panel in the top bar switches skins along four axes — no
+scripting, just links that rewrite these query parameters:
+
+| axis | param | values | default |
+| --- | --- | --- | --- |
+| palette | `pal` | `lime` · `sherbet` · `riso` · `mint` | `lime` |
+| colourway | `scheme` | `day` · `night` · `system` (shown "auto") | `day` |
+| type | `font` | `recursive` · `figtree` · `onest` | `recursive` |
+| structure | `style` | `chunky` · `crisp` | `chunky` |
+
+So any look is a deep link: `/?pal=riso&scheme=night&font=onest&style=crisp`.
+Query parameters beat the settings cookie, the cookie beats the defaults, and
+unknown values fall through. The latin woff2 faces for all three pairings are
+embedded in the binary and served from `/assets/fonts/` — no Google Fonts or
+any other runtime network dependency.
+
+The look is owned by `design/useby` (its `build.py` generates the token
+blocks; `useby.css` is the component sheet), and `src/skin.rs` is generated
+from it — never hand-edit. Restyle flow:
+
+```sh
+# edit design/useby/build.py or useby.css
+python3 design/useby/build.py --check   # WCAG contrast gate; must be 0 failing pairs
+python3 scripts/gen-skin.py             # regenerates src/skin.rs from design/useby
+cargo build                             # rebuild
+```
+
 ## Configuration (env-only, read at boot)
 
 | Var | Default | Meaning |

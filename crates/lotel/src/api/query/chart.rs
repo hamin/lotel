@@ -65,7 +65,7 @@ fn index_of(xs: &[f64], x: f64) -> Option<usize> {
     xs.iter().position(|&e| (e - x).abs() < 1e-6)
 }
 
-/// Stacked bars: rows are `[x_ms, group, value]`; each group becomes a series.
+/// Stacked bars: rows are `[x_secs, group, value]`; each group becomes a series.
 fn builder_stacked(rows: &[Vec<String>]) -> Value {
     let xs = sorted_unique_x(rows);
     let mut totals: Vec<(String, f64)> = Vec::new();
@@ -104,7 +104,7 @@ fn builder_stacked(rows: &[Vec<String>]) -> Value {
     json!({ "time": true, "stacked": true, "xs": xs, "series": series })
 }
 
-/// One line per measure: rows are `[x_ms, m0, m1, …]`.
+/// One line per measure: rows are `[x_secs, m0, m1, …]`.
 fn builder_lines(rows: &[Vec<String>], labels: &[String]) -> Value {
     let xs = sorted_unique_x(rows);
     let series: Vec<Value> = labels

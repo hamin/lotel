@@ -1,4 +1,5 @@
 mod api;
+mod assets;
 mod config;
 mod db;
 mod ingest;
@@ -21,9 +22,13 @@ use topcoat::{
 };
 
 use crate::{
+    config::Config,
     db::Db,
     ingest::Ingest,
-    ui::{CSS, SKIN_COOKIE, live_refresh, nav_links, parse_skin, query_has_skin, theme_panel},
+    ui::{
+        CSS, SKIN_COOKIE, UseBy, live_refresh, nav_links, parse_skin, query_has_skin, short_ttl,
+        theme_panel, thousands,
+    },
 };
 
 use crate::stats::{build_err, err_card};
@@ -41,7 +46,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
         return Ok(view! { (slot) }.boxed());
     }
 
-    // The three theme switches: query beats the cookie, the cookie beats the
+    // The four theme switches: query beats the cookie, the cookie beats the
     // defaults, and a deep link both re-renders and sticks (the cookie is
     // rewritten so the next plain navigation keeps the look).
     let query = topcoat::router::request::uri(cx)
@@ -55,7 +60,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
         jar.add(
             Cookie::build((
                 SKIN_COOKIE,
-                format!("{}:{}:{}", skin.pal, skin.scheme, skin.font),
+                format!("{}:{}:{}:{}", skin.pal, skin.scheme, skin.font, skin.style),
             ))
             .path("/")
             .max_age(time::Duration::days(365))
@@ -76,12 +81,22 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
         _ => "",
     };
 
+    // The retention stickers beside the settings popover: one per signal,
+    // read straight from the boot config the tables were created with.
+    let cfg = context::<Config>(cx);
+    let usebys = vec![
+        UseBy { signal: "logs", ttl: short_ttl(&cfg.ttl_logs) },
+        UseBy { signal: "traces", ttl: short_ttl(&cfg.ttl_traces) },
+        UseBy { signal: "metrics", ttl: short_ttl(&cfg.ttl_metrics) },
+    ];
+
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en"
               data-pal=(skin.pal.to_string())
               data-scheme=(skin.scheme.to_string())
-              data-font=(skin.font.to_string())>
+              data-font=(skin.font.to_string())
+              data-style=(skin.style.to_string())>
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -107,7 +122,9 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
                             pal: skin.pal.to_string(),
                             scheme: skin.scheme.to_string(),
                             font: skin.font.to_string(),
+                            style: skin.style.to_string(),
                             query: query,
+                            usebys: usebys,
                         )
                         (slot)
                     </main>
@@ -142,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
         module_router!()
             .with(db)
             .with(ing)
+            .with(cfg)
             .layer(CookieLayer::new())
             .build(),
     )
@@ -181,7 +199,7 @@ async fn home(cx: &Cx) -> Result<impl View> {
         <div class="grid">
             for row in &counts.1 {
                 <div class="card stat">
-                    <div class="n">(cell(row, 1))</div>
+                    <div class="n">(thousands(&cell(row, 1)))</div>
                     <div class="l">(cell(row, 0))</div>
                 </div>
             }

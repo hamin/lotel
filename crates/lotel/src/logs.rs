@@ -1,5 +1,5 @@
 //! Logs explorer: filtered, tail-able view over otel.main.otlp_logs, with
-//! Honeycomb-style facets and a BM25 "best matches" panel (capped_fts) when
+//! top-value facets and a BM25 "best matches" panel (capped_fts) when
 //! a text query is active.
 
 use serde::Deserialize;
@@ -13,7 +13,7 @@ use topcoat::{
 
 use crate::{
     db::Db,
-    ui::{live_refresh, sev_class},
+    ui::{live_refresh, sev_class, thousands},
 };
 
 /// Query-string filters (`?q=&service=&severity=&range=&limit=`).
@@ -204,7 +204,7 @@ pub(crate) struct FacetValue {
     pub href: String,
 }
 
-/// A facet column (Honeycomb-style): the top values under the current
+/// A facet column: the top values under the current
 /// filters, each a link that toggles that filter.
 pub(crate) struct Facet {
     pub title: &'static str,
@@ -345,7 +345,7 @@ pub(crate) async fn facet_panel(cx: &Cx, facets: Vec<Facet>) -> Result<impl View
                         <a class=(if v.on { "facet-row on" } else { "facet-row" }) href=(v.href)>
                             <span class="facet-k">(v.label)</span>
                             <span class="facet-bar"><i style=(format!("width:{}%", v.width))></i></span>
-                            <span class="facet-n">(v.count)</span>
+                            <span class="facet-n">(thousands(&v.count))</span>
                         </a>
                     }
                 </div>

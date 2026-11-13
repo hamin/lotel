@@ -12,7 +12,7 @@ use topcoat::{
 use crate::{
     db::Db,
     stats,
-    ui::cell,
+    ui::{cell, thousands},
 };
 
 #[derive(Debug, Default, Deserialize)]
@@ -340,7 +340,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
                     <div class="dist-row">
                         <span class="muted">(label.clone())</span>
                         <span class="facet-bar"><i style=(format!("width:{}%", width))></i></span>
-                        <span class="dist-n">(n.clone())</span>
+                        <span class="dist-n">(thousands(n))</span>
                     </div>
                 }
             </div>

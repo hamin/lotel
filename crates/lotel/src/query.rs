@@ -1,4 +1,4 @@
-//! Query engine behind the Explore page: a Honeycomb-style builder and a
+//! Query engine behind the Explore page: a visual builder and a
 //! read-only SQL console over the six signal tables.
 //!
 //! Safety model: the builder never interpolates user text into SQL. Column,
@@ -17,6 +17,12 @@ use topcoat::{
 };
 
 use crate::db::{Db, quote};
+
+/// SQL divisor turning epoch nanoseconds into the epoch SECONDS (fractional,
+/// kept as f64) that uPlot's `time` x-scale expects. Shared by both chart
+/// endpoints ([`crate::query`]'s builder and `/api/metrics/series`) so the
+/// unit can never drift between them again.
+pub(crate) const NS_TO_SECS: &str = "1000000000.0";
 
 /// A queryable column: its stable URL id, a friendly label, its kind, whether
 /// it is a JSON attribute bag (needs a key + `json_extract_string`), and the
@@ -611,8 +617,11 @@ pub fn compile(state: &QueryState) -> Plan {
 
     let from = format!(" FROM otel.main.\"{}\"", ds.table);
     let bucket = bucket_for(state);
-    let xms = format!(
-        "epoch_ns(time_bucket(INTERVAL '{bucket}', {})) / 1000000.0",
+    // The chart x axis: uPlot's time scale expects epoch SECONDS (fractional
+    // kept as f64), so nanoseconds divide by 1e9 — the old 1e6 fed it
+    // milliseconds and it rendered dates in the year ~58 million.
+    let xs_secs = format!(
+        "epoch_ns(time_bucket(INTERVAL '{bucket}', {})) / {NS_TO_SECS}",
         ds.time
     );
 
@@ -664,14 +673,14 @@ pub fn compile(state: &QueryState) -> Plan {
     // Chart: time-bucketed. Grouped → (x, group, first measure) for stacked
     // bars; ungrouped → (x, measure…) for one line per measure.
     let (chart_sql, chart_params, stacked) = if grouped {
-        let sel = format!("{xms} AS _t, {} AS _g, {} AS _v", gexpr[0], mexpr[0]);
+        let sel = format!("{xs_secs} AS _t, {} AS _g, {} AS _v", gexpr[0], mexpr[0]);
         let sql = format!(
             "SELECT {sel}{from}{where_sql} GROUP BY time_bucket(INTERVAL '{bucket}', {}), {} ORDER BY _t",
             ds.time, gexpr[0]
         );
         (sql, params.clone(), true)
     } else {
-        let sel: Vec<String> = std::iter::once(format!("{xms} AS _t"))
+        let sel: Vec<String> = std::iter::once(format!("{xs_secs} AS _t"))
             .chain(
                 mexpr
                     .iter()
@@ -1565,6 +1574,34 @@ mod tests {
     fn unknown_column_is_refused() {
         let s = state("logs", r#"[{"col":"secret","op":"=","val":"1"}]"#, "", "");
         assert!(compile(&s).error.is_some());
+    }
+
+    #[test]
+    fn chart_x_axis_is_epoch_seconds() {
+        // uPlot's time scale expects seconds: both builder chart shapes
+        // (lines and stacked) must divide the ns bucket stamp by 1e9, and
+        // never the old 1e6 that produced millisecond x values.
+        let lines = compile(&state("logs", "", "count", ""));
+        assert_eq!(lines.error, None);
+        assert!(
+            lines.chart_sql.contains(&format!(") / {NS_TO_SECS} AS _t")),
+            "{}",
+            lines.chart_sql
+        );
+        assert!(!lines.chart_sql.contains("/ 1000000.0"), "{}", lines.chart_sql);
+
+        let stacked = compile(&state("logs", "", "count", r#"["service_name"]"#));
+        assert_eq!(stacked.error, None);
+        assert!(
+            stacked.chart_sql.contains(&format!(") / {NS_TO_SECS} AS _t")),
+            "{}",
+            stacked.chart_sql
+        );
+        assert!(
+            !stacked.chart_sql.contains("/ 1000000.0"),
+            "{}",
+            stacked.chart_sql
+        );
     }
 
     #[test]
