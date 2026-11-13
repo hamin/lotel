@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lotel use-by style guide</title>
+<meta name="description" content="The use-by look for lotel: tokens, type, components and porting notes, switchable across four palettes, three type pairings and two styles.">
+@@HEAD@@
+<style>
+  /* guide-only layout; every colour still comes from a token */
+  .sg-sec { margin: 0 0 var(--space-2xl); }
+  .sg-sec > p { max-width: 72ch; color: var(--color-ink-2); margin-bottom: var(--space-md); }
+  .sg-row { display: flex; flex-wrap: wrap; gap: var(--space-sm); align-items: center; margin: 0 0 var(--space-md); }
+  .sg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--space-sm); }
+  .sw-card { border-radius: var(--r-ctl); border: 1px solid var(--color-rule); overflow: hidden; background: var(--color-paper); }
+  .sw-chip { height: 56px; border-bottom: 1px solid var(--color-rule); }
+  .sw-meta { padding: var(--space-xs) var(--space-sm); font-size: var(--text-sm); display: grid; gap: var(--space-3xs); }
+  .sw-meta code { font-size: var(--text-xs); color: var(--color-muted); }
+  .laws { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: var(--space-sm); margin: 0 0 var(--space-md); }
+  .law-card { background: var(--color-paper-2); border-radius: var(--r-card); padding: var(--space-md); display: grid; gap: var(--space-xs); align-content: start; }
+  .law-card .mark { width: 40px; height: 24px; border-radius: 6px; border: var(--line-w) solid var(--color-ink); }
+  .type-row { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--space-md); align-items: baseline; padding: var(--space-sm) 0; border-bottom: 1px solid var(--color-rule-2); }
+  .type-row > span:first-child { font-size: var(--text-sm); color: var(--color-muted); }
+  .fig { font-family: var(--font-mono); font-variation-settings: var(--fv-figure); font-variant-numeric: tabular-nums; font-weight: 700; font-size: var(--text-2xl); }
+  .skel { display: block; height: 14px; border-radius: 4px; background: var(--color-paper-3); margin: var(--space-xs) 0; }
+  .skel.w60 { width: 60%; } .skel.w40 { width: 40%; } .skel.w80 { width: 80%; }
+  .delta { border: 1px solid var(--color-rule); padding: var(--space-xs) var(--space-md); background: var(--color-paper-2); border-radius: var(--r-ctl); margin: 0 0 var(--space-sm); max-width: 90ch; }
+  .delta p + p { margin-top: var(--space-2xs); }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--space-md); }
+  ol.port { padding-left: 1.25rem; max-width: 90ch; display: grid; gap: var(--space-xs); }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <p class="brand">lotel</p>
+  <a href="styleguide.html" aria-current="page">Style guide</a>
+  <a href="pages/home.html">Dashboard</a>
+  <a href="pages/logs.html">Logs</a>
+  <a href="pages/traces.html">Traces</a>
+  <a href="pages/trace.html">One trace</a>
+  <a href="pages/metrics.html">Metrics</a>
+  <a href="pages/metric.html">One metric</a>
+  <a href="pages/query.html">Explore</a>
+  <a href="pages/services.html">Services</a>
+  <a href="pages/storage.html">Storage</a>
+</nav>
+<main>
+<header class="top">@@SET@@</header>
+
+<h1>Every row has a use-by date</h1>
+<p class="sub">lotel’s one promise is that telemetry forgets on schedule. This look makes that visible: retention rides along as a sticker on every screen, and the storage page draws what forgets next. Pick a look from the button at the top right; it sticks across every page in this folder.</p>
+
+<section class="sg-sec" aria-labelledby="laws">
+  <h2 id="laws">Four colours, four jobs</h2>
+  <p>Every palette assigns the same four roles. A colour never borrows another role’s job, so a reader learns the map once.</p>
+  <div class="laws">
+    <div class="law-card"><span class="mark" style="background: var(--color-accent)"></span><b>Accent: what you do</b><span class="muted">The current page, the one filled button, a picked facet value, selection. <code>--color-accent</code></span></div>
+    <div class="law-card"><span class="mark" style="background: var(--color-accent-2)"></span><b>Second hue: what the probe measured</b><span class="muted">Series, facet bars, latency sparks, segments on the ribbon. <code>--color-accent-2</code></span></div>
+    <div class="law-card"><span class="mark" style="background: var(--color-bad)"></span><b>Red: the fault</b><span class="muted">Error spans, error badges, error-rate sparks, red edges. Nothing decorative is red. <code>--color-bad</code></span></div>
+    <div class="law-card"><span class="mark" style="background: var(--color-forget)"></span><b>Sticker: when it forgets</b><span class="muted">TTL stickers in the top bar and on storage, the use-by line. <code>--color-forget</code></span></div>
+  </div>
+</section>
+
+<section class="sg-sec" aria-labelledby="tokens">
+  <h2 id="tokens">Tokens for this palette</h2>
+  <p>Values update as you switch. Names on the left of each card are what <code>skin.rs</code> and the chart JS already read; the new ones are marked new.</p>
+  <div class="sg-grid" id="swatches"></div>
+</section>
+
+<section class="sg-sec" aria-labelledby="type">
+  <h2 id="type">Type</h2>
+  <p>Recursive is one variable font with a casual axis and a mono axis: heads are casual, the interface is linear, figures and log bodies are mono. One file covers all three voices, which suits a single binary. The other two pairings swap in a sans plus a mono.</p>
+  <div class="type-row"><span>h1 · page title</span><h1 style="margin:0">Service map</h1></div>
+  <div class="type-row"><span>h2 · section</span><h2 style="margin:0">Error rate in the last hour</h2></div>
+  <div class="type-row"><span>h3 · panel</span><h3 style="margin:0">Span duration distribution</h3></div>
+  <div class="type-row"><span>body · 15px</span><p>Spans land in the capped store with age-based retention; p95 comes straight from the segment files.</p></div>
+  <div class="type-row"><span>label · 13px</span><span class="muted" style="font-size: var(--text-sm)">time range</span></div>
+  <div class="type-row"><span>figure · mono</span><span class="fig">445,806</span></div>
+  <div class="type-row"><span>log body · mono</span><span class="logbody">retrying payment after transient error (attempt 2 of 3)</span></div>
+</section>
+
+<section class="sg-sec" aria-labelledby="controls">
+  <h2 id="controls">Controls</h2>
+  <p>One filled button per screen (Apply, Run query). In chunky style, pressable things cast a hard ink shadow and sink 2px on press; crisp style drops the shadow.</p>
+  <div class="sg-row">
+    <button type="button" class="primary">Apply</button>
+    <button type="button">Export CSV</button>
+    <button type="button" disabled>Disabled</button>
+    <button type="button" class="qadd">+ add filter</button>
+    <label class="tail"><input type="checkbox" checked> live tail</label>
+    <label class="tail"><input type="checkbox"> live tail</label>
+  </div>
+  <form class="filters" onsubmit="return false">
+    <label>Search<input name="q" placeholder="body contains…" aria-label="Search"></label>
+    <label>Service<select name="service"><option>all</option><option>api-gateway</option></select></label>
+    <label>Severity<select name="severity"><option>all</option><option>ERROR</option></select></label>
+    <button type="submit">Apply</button>
+  </form>
+  <div class="sg-row">
+    <span class="qtoken"><span class="qcol">service</span><select aria-label="operator"><option>=</option></select><input class="qval" value="checkout" aria-label="value"><button type="button" class="qdel" aria-label="Remove">×</button></span>
+  </div>
+  <div class="qtabs"><a class="tab on" href="#controls">Query builder</a><a class="tab" href="#controls">SQL console</a></div>
+</section>
+
+<section class="sg-sec" aria-labelledby="badges">
+  <h2 id="badges">Badges and stickers</h2>
+  <p>Badges label kind and severity: a soft fill and lowercase mono, never tracked capitals. Stickers are the one tilted thing on a page, and each carries a real retention value.</p>
+  <div class="sg-row">
+    <span class="badge trace">trace</span><span class="badge debug">debug</span><span class="badge info">info</span>
+    <span class="badge warn">warn</span><span class="badge error">error</span><span class="badge fatal">fatal</span>
+    <span class="badge hist">histogram</span><span class="badge other">{items}</span>
+  </div>
+  <div class="useby-strip"><span class="useby-cap">forgets after</span><span class="useby"><span class="useby-k">logs</span> <b>7d</b></span><span class="useby"><span class="useby-k">traces</span> <b>3d</b></span><span class="useby"><span class="useby-k">metrics</span> <b>30d</b></span></div>
+</section>
+
+<section class="sg-sec" aria-labelledby="data">
+  <h2 id="data">Figures, tables, bars</h2>
+  <p>The first stat tile wears the accent: it is the signal the page is about. Tables have one heavy rule under the head and hairlines between rows, no outer frame.</p>
+  <div class="grid"><div class="card stat"><div class="n">445,806</div><div class="l">logs</div></div><div class="card stat"><div class="n">857,172</div><div class="l">traces</div></div><div class="card stat"><div class="n">29,918</div><div class="l">gauge</div></div></div>
+  <div class="two">
+    <div class="facet"><h3>Severity</h3>
+      <a class="facet-row" href="#data"><span class="facet-k">info</span><span class="facet-bar"><i style="width:100%"></i></span><span class="facet-n">329,378</span></a>
+      <a class="facet-row" href="#data"><span class="facet-k">warn</span><span class="facet-bar"><i style="width:27%"></i></span><span class="facet-n">89,565</span></a>
+      <a class="facet-row" href="#data"><span class="facet-k">error</span><span class="facet-bar"><i style="width:8%"></i></span><span class="facet-n">26,863</span></a>
+    </div>
+    <table><thead><tr><th>time</th><th>service</th><th>severity</th><th>body</th></tr></thead><tbody>
+      <tr><td class="muted">06:59:15.161</td><td>payments</td><td><span class="badge info">info</span></td><td class="logbody">session renewed</td></tr>
+      <tr><td class="muted">06:59:15.145</td><td>checkout</td><td><span class="badge warn">warn</span></td><td class="logbody">cache miss ratio above 0.9</td></tr>
+      <tr><td class="muted">06:59:15.139</td><td>api-gateway</td><td><span class="badge error">error</span></td><td class="logbody">gateway timeout after 3 retries</td></tr>
+    </tbody></table>
+  </div>
+  <div class="wf" aria-label="Waterfall sample">
+    <div class="wfruler"><div class="wflabel">span</div><div class="wftrack"><span class="tick" style="left:0%">0</span><span class="tick" style="left:50%">41.7 ms</span></div></div>
+    <a class="wfrow" href="#data"><div class="wflabel"><span class="svc-dot svc0">●</span><b>api-gateway</b> GET /api/checkout</div><div class="wftrack"><span class="wfbar svc0" style="left:0%;width:100%">83.5 ms</span></div></a>
+    <a class="wfrow" href="#data"><div class="wflabel" style="padding-left:14px"><span class="svc-dot svc3">●</span><b>checkout</b> POST /checkout</div><div class="wftrack"><span class="wfbar svc3" style="left:9%;width:65%">54.4 ms</span></div></a>
+    <a class="wfrow" href="#data"><div class="wflabel" style="padding-left:28px"><span class="svc-dot svc4">●</span><b>payments</b> POST /payments</div><div class="wftrack"><span class="wfbar svc4 wferr" style="left:14%;width:45%">38.1 ms</span></div></a>
+  </div>
+</section>
+
+<section class="sg-sec" aria-labelledby="states">
+  <h2 id="states">States every live region needs</h2>
+  <p>Loading, empty and error, drawn in the same shape as the full state so nothing jumps when data lands.</p>
+  <div class="two">
+    <div class="card" aria-busy="true"><h3>Loading</h3><span class="skel w80"></span><span class="skel w60"></span><span class="skel w40"></span></div>
+    <div class="card"><h3>Empty</h3><p class="muted">No spans in this window. Send OTLP traffic or widen the range.</p><div class="sg-row" style="margin-top: var(--space-sm)"><button type="button">Widen to 24 hours</button></div></div>
+    <div class="qerr"><b>Query failed.</b> Column <code>severity_txt</code> does not exist in otlp_logs.<pre>Binder Error: Referenced column "severity_txt" not found</pre></div>
+  </div>
+</section>
+
+<section class="sg-sec" aria-labelledby="port">
+  <h2 id="port">Porting this into lotel</h2>
+  <p>The mocks are the app’s own markup, fetched live and restyled, so almost everything is a stylesheet swap. Three markup changes are marked below.</p>
+  <ol class="port">
+    <li><b>Tokens.</b> Replace the palette blocks in <code>skin.rs</code> with <code>tokens.css</code>. It is generated by <code>design/useby/build.py</code> from one table, all hex (Chrome 98 has no oklch or color-mix). The token names the templates and chart JS read (<code>--color-accent</code>, <code>-accent-2</code>, <code>-bad</code>, <code>-muted</code>, <code>-rule-2</code>, …) are kept.</li>
+    <li><b>Component sheet.</b> Replace the certified sheet with <code>useby.css</code>. It styles every selector the current skin styles. The only <code>:has</code> use was dropped.</li>
+    <li><b>Settings: port every option.</b> The owner keeps the whole switcher until a look is picked, so ship all of it: <code>PALETTES</code> becomes lime, sherbet, riso, mint; <code>FONTS</code> becomes recursive, figtree, onest; <code>SCHEMES</code> is unchanged. Add <code>STYLES</code> (chunky, crisp) as a fourth group, a <code>data-style</code> attribute on <code>&lt;html&gt;</code>, and <code>?style=</code> in the same cookie flow. Default: lime, day, recursive, chunky (the brief was a light look; auto stays one click away). Each option is one attribute selector in <code>tokens.css</code>, so trimming later is deleting rows from the consts and blocks from the sheet.</li>
+    <li><b>Rename before release.</b> The shipped palettes are named honeycomb and motherduck, and the popover’s deep-link example mentions one. Both are other companies’ marks; the new names avoid them.</li>
+    <li><b>Fonts.</b> lotel is local-first, so embed the woff2 files with <code>include_bytes!</code> and serve them from <code>/assets/fonts/</code> instead of Google Fonts. Embed all of them (Recursive, Figtree, Spline Sans Mono, Onest, DM Mono, latin subset, roughly 0.5 to 1 MB of binary); browsers only download a face a page actually uses, so the unused pairings cost binary size, not page weight. Recursive needs one file for every role.</li>
+  </ol>
+  <h3 style="margin-top: var(--space-lg)">Markup deltas</h3>
+  <div class="delta"><p><b>1. Retention stickers in the top bar.</b> In <code>ui.rs</code>, render <code>&lt;div class="useby-strip"&gt;</code> before the settings popover inside <code>header.top</code>, one <code>.useby</code> per signal from <code>Config.ttl_logs / ttl_traces / ttl_metrics</code>.</p></div>
+  <div class="delta"><p><b>2. Thousands separators</b> on stat tiles (<code>.card.stat .n</code>) and facet counts. Format in Rust, not CSS.</p></div>
+  <div class="delta"><p><b>3. The use-by ribbon</b> on <code>/storage</code>, above the tables: one <code>.ribbon-row</code> per table from <code>capped_status</code>. Each segment is a <code>.seg</code> (<code>.seg-open</code> when unsealed) with <code>left = (min_ts − (now − ttl)) / ttl</code> and <code>width = (max_ts − min_ts) / ttl</code>. The right column names the oldest sealed segment and its countdown <code>max_ts + ttl − now</code>. Use the server clock for now; the mock uses the newest row because its data is old. Reference implementation: <code>storage_ribbon()</code> in <code>build.py</code>.</p></div>
+</section>
+</main>
+</div>
+<script>
+/* guide-only: print each token's live value beside its swatch */
+(function(){
+  var T=[["paper","page"],["paper-2","wells, filter bar, nav"],["paper-3","bar tracks, skeletons"],["ink","text, outlines"],["ink-2","secondary text"],["muted","labels, meta"],["rule","hairlines"],["accent","what you do"],["accent-ink","text on accent"],["accent-deep","accent as text (new)"],["accent-2","what was measured"],["accent-2-soft","segment fill (new)"],["bad","the fault"],["bad-soft","error badge fill (new)"],["warn-soft","warn badge fill (new)"],["info-soft","info badge fill (new)"],["forget","use-by sticker (new)"],["focus","focus ring"]];
+  var cs=getComputedStyle(document.documentElement),box=document.getElementById('swatches');
+  T.forEach(function(t){var v=cs.getPropertyValue('--color-'+t[0]).trim();var d=document.createElement('div');d.className='sw-card';
+    d.innerHTML='<div class="sw-chip" style="background:var(--color-'+t[0]+')"></div><div class="sw-meta"><b>'+t[1]+'</b><code>--color-'+t[0]+' '+v+'</code></div>';box.appendChild(d);});
+  for(var i=0;i<6;i++){var v=cs.getPropertyValue('--svc'+i).trim();var d=document.createElement('div');d.className='sw-card';
+    d.innerHTML='<div class="sw-chip" style="background:var(--svc'+i+')"></div><div class="sw-meta"><b>service '+i+'</b><code>--svc'+i+' '+v+' (new)</code></div>';box.appendChild(d);}
+})();
+</script>
+@@FOOT@@
+</body>
+</html>
