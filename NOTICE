@@ -1,0 +1,45 @@
+lotel — Copyright 2026 Haris Amin
+
+lotel is licensed under the Apache License, Version 2.0. See LICENSE for
+the full text.
+
+This product bundles third-party components, each under its own license:
+
+- DuckDB (MIT) — compiled into the binary through the `duckdb` crate's
+  `bundled` feature. Copyright 2018-2026 Stichting DuckDB Foundation.
+  License text: licenses/DUCKDB-MIT.txt.
+
+- otlp extension / duckdb-otlp (MIT) — the OTLP/HTTP ingest receiver,
+  embedded as crates/lotel/extensions/otlp.duckdb_extension.
+  Copyright 2018-2025 Stichting DuckDB Foundation.
+  License text: licenses/DUCKDB-OTLP-MIT.txt.
+
+- fts extension (MIT, part of DuckDB) — full-text search, embedded as
+  crates/lotel/extensions/fts.duckdb_extension.
+  Copyright 2018-2026 Stichting DuckDB Foundation.
+  License text: licenses/DUCKDB-MIT.txt.
+
+- uPlot v1.6.31 (MIT) — charting, embedded from
+  crates/lotel/assets/vendor/uPlot.min.js and uPlot.min.css.
+  Copyright (c) 2022 Leon Sorokin.
+  License text: crates/lotel/assets/vendor/uPlot.LICENSE.
+
+- Fonts (SIL Open Font License 1.1) — the latin woff2 faces baked into
+  the binary and served from /assets/fonts/, kept under
+  crates/lotel/assets/fonts/. The full OFL text with each family's
+  copyright notice sits beside it in
+  crates/lotel/assets/fonts/LICENSES/:
+    - Recursive — Copyright 2020 The Recursive Project Authors
+      (LICENSES/RECURSIVE-OFL.txt)
+    - Figtree — Copyright 2022 The Figtree Project Authors
+      (LICENSES/FIGTREE-OFL.txt)
+    - Spline Sans Mono — Copyright 2022 The Spline Sans Mono Project
+      Authors (LICENSES/SPLINE-SANS-MONO-OFL.txt)
+    - Onest — Copyright 2021 The Onest Project Authors
+      (LICENSES/ONEST-OFL.txt)
+    - DM Mono — Copyright 2020 The DM Mono Project Authors
+      (LICENSES/DM-MONO-OFL.txt)
+
+- capped (Apache-2.0) — the storage layer, embedded as
+  crates/lotel/extensions/capped.duckdb_extension.
+  Copyright 2026 Haris Amin.

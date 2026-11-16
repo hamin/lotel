@@ -183,4 +183,9 @@ in [docs/roadmap.md](docs/roadmap.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). NOTICE names the
+bundled third-party components: DuckDB, the embedded `otlp` and `fts`
+extensions (MIT), uPlot (MIT), the five UI fonts (SIL OFL 1.1, full texts
+under
+[`crates/lotel/assets/fonts/LICENSES/`](crates/lotel/assets/fonts/LICENSES/)),
+and [`capped`](../capped) (Apache-2.0).
