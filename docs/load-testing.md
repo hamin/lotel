@@ -129,6 +129,6 @@ one keep-alive connection per process (like a real SDK) and a paced warmup
 - `scripts/stress.sh` — storm + latency/loss gates (ports 18091/14329)
 - `scripts/otlp-gen.py` — the traffic generator: correlated traces→logs→
   metrics, keep-alive, paced warmup (`--warmup M --for S --interval I --rate R`)
-- `../capped/shell/Makefile` — `asan` target (Release + `-fsanitize=address`
+- `../capped/Makefile` — `asan` target (Release + `-fsanitize=address`
   across extension sources; `detect_container_overflow=0` is documented there
   and indicts only duckdb core's own vector annotations)

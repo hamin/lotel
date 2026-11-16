@@ -1,12 +1,12 @@
 # lotel task runner
 
-CAPPED_EXT := "../capped/shell/build/release/extension/capped/capped.duckdb_extension"
+CAPPED_EXT := "../capped/build/release/extension/capped/capped.duckdb_extension"
 OTLP_EXT := "~/.duckdb/extensions/v2.0.0/osx_arm64/otlp.duckdb_extension"
 FTS_EXT := "~/.duckdb/extensions/v2.0.0/osx_arm64/fts.duckdb_extension"
 DEST := "crates/lotel/extensions"
 
 # Copy the prebuilt extensions into the app for embedding.
-# capped: built from the sibling shell (`cd ../capped/shell && GEN=ninja make release`).
+# capped: built from the sibling repo (`cd ../capped && GEN=ninja make release`).
 # otlp:   community extension, e.g. `duckdb -c "INSTALL otlp FROM community;"` fetches it.
 fetch-extensions:
     mkdir -p {{DEST}}

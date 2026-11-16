@@ -119,8 +119,8 @@ just stress             # 30s storm: concurrent ingest + every endpoint, p95 gat
 just soak               # 10 min sustained: watchdog over all pages, leak/fd/heap gates
 ```
 
-`just fetch-extensions` expects the sibling `capped` shell built
-(`cd ../capped/shell && GEN=ninja make release`) and the community `otlp`
+`just fetch-extensions` expects the sibling `capped` repo built
+(`cd ../capped && GEN=ninja make release`) and the community `otlp`
 extension installed for the pinned DuckDB version. Both are then
 `include_bytes!`-embedded, so the shipped binary needs nothing at runtime.
 
@@ -137,7 +137,7 @@ extension installed for the pinned DuckDB version. Both are then
 Soak and stress are deliberately **local**, not CI: they run on their own
 ports beside a dev server, and a 10-minute soak on a shared runner buys
 nothing a nightly laptop run doesn't. The DuckDB/extension side has its own
-memory gate: `cd ../capped/shell && GEN=ninja make asan` builds Release with
+memory gate: `cd ../capped && GEN=ninja make asan` builds Release with
 AddressSanitizer and runs the whole sqllogictest suite inside it. Full
 reference — gates, tunables, results, and the macOS allocator investigation —
 in [`docs/load-testing.md`](docs/load-testing.md).
