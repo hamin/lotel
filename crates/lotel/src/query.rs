@@ -3,8 +3,9 @@
 //!
 //! Safety model: the builder never interpolates user text into SQL. Column,
 //! measure, operator and bucket tokens are resolved through this module's
-//! whitelists; user *values* are always bound parameters. The SQL console is
-//! gated by [`is_read_only_sql`] before it ever reaches DuckDB.
+//! whitelists; user *values* and attribute JSON paths are always bound
+//! parameters (DuckDB accepts the `json_extract` path as a `?`). The SQL
+//! console is gated by [`is_read_only_sql`] before it ever reaches DuckDB.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -439,22 +440,45 @@ fn bucket_for(state: &QueryState) -> String {
     auto_bucket(&state.range)
 }
 
-/// A column reference resolved to a safe SQL expression + kind.
+/// A column reference resolved to a safe SQL expression + kind. An attribute
+/// read carries one `?` for its JSON path; [`Resolved::path`] must be bound
+/// once for every occurrence of that expression in the statement.
 struct Resolved {
     expr: String,
+    /// JSON path bound to the `?` in `expr` (Some only for `@col:key` reads).
+    path: Option<String>,
     kind: Kind,
     label: String,
 }
 
+/// Bind a column's JSON path once, for one occurrence of `r.expr` in the SQL
+/// being built. No-op for plain columns.
+fn push_path(params: &mut Vec<String>, r: &Resolved) {
+    if let Some(p) = &r.path {
+        params.push(p.clone());
+    }
+}
+
+/// Bound parameters for a list of expressions, one `?` (a JSON path) each,
+/// in order of appearance.
+fn paths(list: &[Option<String>]) -> Vec<String> {
+    list.iter().flatten().cloned().collect()
+}
+
 /// Resolve a builder column reference. Plain ids map to a registry column;
-/// `@col:key` reads a JSON attribute via `json_extract_string`.
+/// `@col:key` reads a JSON attribute via `json_extract_string` with the key
+/// carried as a bound path parameter — it never enters the SQL text, so no
+/// quoting in a key can break out of a string literal.
 fn resolve_col(ds: &Dataset, col: &str) -> Option<Resolved> {
     if let Some(rest) = col.strip_prefix('@') {
         let (src, key) = rest.split_once(':')?;
         let cd = ds.cols.iter().find(|c| c.key == src && c.is_attr)?;
-        let safe_key = key.replace('"', "\\\"");
+        // The `\"` escaping is DuckDB's JSON-path string syntax (the path is
+        // data here, not SQL), kept so keys with a quote still address the
+        // right member once bound.
         return Some(Resolved {
-            expr: format!("json_extract_string({}, '$.\"{}\"')", cd.expr, safe_key),
+            expr: format!("json_extract_string({}, ?)", cd.expr),
+            path: Some(format!("$.\"{}\"", key.replace('"', "\\\""))),
             kind: Kind::Text,
             label: format!("{} · {}", cd.label, key),
         });
@@ -462,15 +486,17 @@ fn resolve_col(ds: &Dataset, col: &str) -> Option<Resolved> {
     let cd = ds.cols.iter().find(|c| c.key == col && !c.is_attr)?;
     Some(Resolved {
         expr: cd.expr.to_string(),
+        path: None,
         kind: cd.kind,
         label: cd.label.to_string(),
     })
 }
 
 /// Resolve a measure token (`count`, `avg:value`, `p95:duration_ms`).
-fn resolve_measure(ds: &Dataset, m: &str) -> Option<(String, String)> {
+/// Returns (SQL expression, label, path to bind for the expression's `?`).
+fn resolve_measure(ds: &Dataset, m: &str) -> Option<(String, String, Option<String>)> {
     if m == "count" {
-        return Some(("count(*)".to_string(), "count".to_string()));
+        return Some(("count(*)".to_string(), "count".to_string(), None));
     }
     let (func, col) = m.split_once(':')?;
     let spec = MEASURE_FNS.iter().find(|(f, _, _, _)| *f == func)?;
@@ -490,7 +516,8 @@ fn resolve_measure(ds: &Dataset, m: &str) -> Option<(String, String)> {
         }
         _ => return None,
     };
-    Some((expr, format!("{func}({})", r.label)))
+    // Every aggregate above wraps the column expression exactly once.
+    Some((expr, format!("{func}({})", r.label), r.path))
 }
 
 /// The compiled plan a page or chart endpoint executes.
@@ -549,19 +576,31 @@ fn build_where(ds: &Dataset, state: &QueryState) -> Result<(String, Vec<String>)
                 } else {
                     conds.push(format!("{e} {cmp} ?"));
                 }
+                push_path(&mut params, &r); // path `?` precedes the value `?`
                 params.push(f.val.clone());
             }
             "~" | "!~" => {
                 let like = if op == "~" { "ILIKE" } else { "NOT ILIKE" };
                 conds.push(format!("{e} {like} '%' || ? || '%'"));
+                push_path(&mut params, &r);
                 params.push(f.val.clone());
             }
             ">" | ">=" | "<" | "<=" => {
                 conds.push(format!("CAST({e} AS DOUBLE) {op} CAST(? AS DOUBLE)"));
+                push_path(&mut params, &r);
                 params.push(f.val.clone());
             }
-            "exists" => conds.push(format!("({e} IS NOT NULL AND CAST({e} AS VARCHAR) <> '')")),
-            "nexists" => conds.push(format!("({e} IS NULL OR CAST({e} AS VARCHAR) = '')")),
+            // These repeat the expression twice, so its path binds twice.
+            "exists" => {
+                conds.push(format!("({e} IS NOT NULL AND CAST({e} AS VARCHAR) <> '')"));
+                push_path(&mut params, &r);
+                push_path(&mut params, &r);
+            }
+            "nexists" => {
+                conds.push(format!("({e} IS NULL OR CAST({e} AS VARCHAR) = '')"));
+                push_path(&mut params, &r);
+                push_path(&mut params, &r);
+            }
             _ => return Err(format!("unknown operator '{}'", f.op)),
         }
     }
@@ -593,11 +632,13 @@ pub fn compile(state: &QueryState) -> Plan {
         state.measures()
     };
     let mut mexpr: Vec<String> = Vec::new();
+    let mut mpath: Vec<Option<String>> = Vec::new();
     let mut mlabels: Vec<String> = Vec::new();
     for m in &measures {
         match resolve_measure(ds, m) {
-            Some((expr, label)) => {
+            Some((expr, label, path)) => {
                 mexpr.push(expr);
+                mpath.push(path);
                 mlabels.push(label);
             }
             None => return fail(&format!("invalid measure '{m}'")),
@@ -607,9 +648,13 @@ pub fn compile(state: &QueryState) -> Plan {
     // Group-by (max 2).
     let group_keys: Vec<String> = state.groups().into_iter().take(2).collect();
     let mut gexpr: Vec<String> = Vec::new();
+    let mut gpath: Vec<Option<String>> = Vec::new();
     for g in &group_keys {
         match resolve_col(ds, g) {
-            Some(r) => gexpr.push(r.expr),
+            Some(r) => {
+                gexpr.push(r.expr);
+                gpath.push(r.path);
+            }
             None => return fail(&format!("unknown column '{g}'")),
         }
     }
@@ -629,6 +674,10 @@ pub fn compile(state: &QueryState) -> Plan {
     let count_sql = format!("SELECT count(*){from}{where_sql}");
 
     // Table: grouped totals, or a time-bucket detail when ungrouped.
+    // Grouped SQL groups by the SELECT aliases (g0, g1), never by repeating
+    // the expressions: DuckDB matches GROUP BY expressions syntactically, so
+    // an attribute read would have to bind its path `?` twice — and two
+    // placeholders are never "the same expression" to the binder.
     let (table_sql, table_params) = if grouped {
         let sel: Vec<String> = gexpr
             .iter()
@@ -641,14 +690,18 @@ pub fn compile(state: &QueryState) -> Plan {
                     .map(|(i, e)| format!("{e} AS m{i}")),
             )
             .collect();
-        let gb: Vec<String> = gexpr.clone();
+        let gb: Vec<String> = (0..gexpr.len()).map(|i| format!("g{i}")).collect();
         let sql = format!(
             "SELECT {}{from}{where_sql} GROUP BY {} ORDER BY m0 DESC LIMIT {}",
             sel.join(", "),
             gb.join(", "),
             state.limit()
         );
-        (sql, params.clone())
+        // `?` order of appearance: SELECT (groups then measures), then WHERE.
+        let mut tp = paths(&gpath);
+        tp.extend(paths(&mpath));
+        tp.extend(params.iter().cloned());
+        (sql, tp)
     } else {
         let sel: Vec<String> = std::iter::once(format!(
             "time_bucket(INTERVAL '{bucket}', {}) AS _t",
@@ -667,18 +720,27 @@ pub fn compile(state: &QueryState) -> Plan {
             ds.time,
             state.limit()
         );
-        (sql, params.clone())
+        let mut tp = paths(&mpath);
+        tp.extend(params.iter().cloned());
+        (sql, tp)
     };
 
     // Chart: time-bucketed. Grouped → (x, group, first measure) for stacked
     // bars; ungrouped → (x, measure…) for one line per measure.
     let (chart_sql, chart_params, stacked) = if grouped {
         let sel = format!("{xs_secs} AS _t, {} AS _g, {} AS _v", gexpr[0], mexpr[0]);
+        // _g aliases the group expression for the same reason the table
+        // groups by g0: one expression, one path `?`.
         let sql = format!(
-            "SELECT {sel}{from}{where_sql} GROUP BY time_bucket(INTERVAL '{bucket}', {}), {} ORDER BY _t",
-            ds.time, gexpr[0]
+            "SELECT {sel}{from}{where_sql} GROUP BY time_bucket(INTERVAL '{bucket}', {}), _g ORDER BY _t",
+            ds.time
         );
-        (sql, params.clone(), true)
+        // `?` order: SELECT (_g then _v), then WHERE.
+        let mut cp: Vec<String> = Vec::new();
+        cp.extend(gpath.first().and_then(|p| p.clone()));
+        cp.extend(mpath.first().and_then(|p| p.clone()));
+        cp.extend(params.iter().cloned());
+        (sql, cp, true)
     } else {
         let sel: Vec<String> = std::iter::once(format!("{xs_secs} AS _t"))
             .chain(
@@ -693,7 +755,9 @@ pub fn compile(state: &QueryState) -> Plan {
             sel.join(", "),
             ds.time
         );
-        (sql, params.clone(), false)
+        let mut cp = paths(&mpath);
+        cp.extend(params.iter().cloned());
+        (sql, cp, false)
     };
 
     let display = inline(&table_sql, &table_params);
@@ -701,7 +765,7 @@ pub fn compile(state: &QueryState) -> Plan {
     Plan {
         error: None,
         count_sql,
-        count_params: params.clone(),
+        count_params: params,
         table_sql,
         table_params,
         chart_sql,
@@ -823,9 +887,15 @@ pub fn compile_events(state: &QueryState) -> Plan {
     };
     let from = format!(" FROM otel.main.\"{}\"", ds.table);
     let mut sel: Vec<String> = vec![format!("CAST({} AS VARCHAR) AS _t", ds.time)];
+    // Display columns resolve through the same path; any attribute read adds
+    // a path param ahead of the WHERE params (SELECT precedes WHERE).
+    let mut table_params: Vec<String> = Vec::new();
     for k in ds.display {
         match resolve_col(ds, k) {
-            Some(r) => sel.push(format!("{} AS \"{}\"", r.expr, k)),
+            Some(r) => {
+                sel.push(format!("{} AS \"{}\"", r.expr, k));
+                table_params.extend(r.path);
+            }
             None => return fail(&format!("unknown column '{k}'")),
         }
     }
@@ -836,13 +906,14 @@ pub fn compile_events(state: &QueryState) -> Plan {
         state.limit()
     );
     let count_sql = format!("SELECT count(*){from}{where_sql}");
-    let display = inline(&sql, &params);
+    table_params.extend(params.iter().cloned());
+    let display = inline(&sql, &table_params);
     Plan {
         error: None,
         count_sql,
-        count_params: params.clone(),
+        count_params: params,
         table_sql: sql,
-        table_params: params,
+        table_params,
         chart_sql: String::new(),
         chart_params: vec![],
         measure_labels: vec![],
@@ -1614,10 +1685,89 @@ mod tests {
         );
         let p = compile(&s);
         assert_eq!(p.error, None);
+        // The key travels as a bound path parameter, never inlined into the
+        // SQL text (J0: inlining it let a single quote break out of the
+        // string literal).
         assert!(
             p.table_sql
-                .contains("json_extract_string(log_attributes, '$.\"http.method\"')")
+                .contains("json_extract_string(log_attributes, ?)"),
+            "{}",
+            p.table_sql
         );
+        assert!(
+            p.table_params
+                .iter()
+                .any(|q| q == "$.\"http.method\""),
+            "{:?}",
+            p.table_params
+        );
+        // the human-readable display still shows the full call
+        assert!(
+            p.display
+                .contains("json_extract_string(log_attributes, '$.\"http.method\"')"),
+            "{}",
+            p.display
+        );
+    }
+
+    #[test]
+    fn attribute_key_quote_is_bound_not_inlined() {
+        // J0: resolve_col used to inline '$."<key>"' escaping only ", so a
+        // key like x')||'y closed the SQL string literal and injected text
+        // into the statement. The path must be a bound parameter instead:
+        // no quote in a key can ever reach the SQL text.
+        let evil = r#"[{"col":"@log_attributes:x')||'y","op":"=","val":"z"}]"#;
+        let p = compile(&state("logs", evil, "", ""));
+        assert_eq!(p.error, None);
+        for sql in [&p.table_sql, &p.count_sql, &p.chart_sql] {
+            assert!(!sql.contains("x'"), "key leaked into SQL text: {sql}");
+            assert!(!sql.contains("|| '"), "key text reached the operator: {sql}");
+        }
+        assert!(
+            p.table_sql.contains("json_extract_string(log_attributes, ?)"),
+            "path must be bound: {}",
+            p.table_sql
+        );
+        assert!(
+            p.table_params
+                .iter()
+                .any(|q| q == r#"$."x')||'y""#),
+            "path must arrive as a bound parameter: {:?}",
+            p.table_params
+        );
+    }
+
+    #[test]
+    fn attribute_paths_bind_per_expression_occurrence() {
+        // `exists` repeats the expression twice in one condition → one bound
+        // path per `?`, in order of appearance.
+        let p = compile(&state(
+            "logs",
+            r#"[{"col":"@log_attributes:http.method","op":"exists","val":""}]"#,
+            "",
+            "",
+        ));
+        assert_eq!(p.error, None);
+        assert_eq!(p.table_sql.matches('?').count(), 3, "{}", p.table_sql); // cutoff + 2×path
+        assert_eq!(p.table_params.len(), 3);
+        assert_eq!(p.table_params[1], "$.\"http.method\"");
+        assert_eq!(p.table_params[2], "$.\"http.method\"");
+
+        // Grouped: the table/chart group by the SELECT aliases (g0 / _g), so
+        // the attribute expression — and its path `?` — appears exactly once.
+        // (DuckDB matches GROUP BY expressions syntactically; repeating the
+        // expression with a second placeholder binder-errors "must appear in
+        // the GROUP BY clause" — the regression this pins.)
+        let g = compile(&state("logs", "", "", r#"["@log_attributes:http.method"]"#));
+        assert_eq!(g.error, None);
+        assert!(g.table_sql.contains("GROUP BY g0"), "{}", g.table_sql);
+        assert_eq!(g.table_sql.matches('?').count(), 2, "{}", g.table_sql); // path + cutoff
+        assert_eq!(g.table_params.len(), 2);
+        assert_eq!(g.table_params[0], "$.\"http.method\"");
+        assert!(g.chart_sql.contains(", _g ORDER BY _t"), "{}", g.chart_sql);
+        assert_eq!(g.chart_sql.matches('?').count(), 2, "{}", g.chart_sql);
+        assert_eq!(g.chart_params.len(), 2);
+        assert_eq!(g.chart_params[0], "$.\"http.method\""); // SELECT _g
     }
 
     #[test]
@@ -1643,7 +1793,11 @@ mod tests {
         let s = state("logs", "", r#"["count"]"#, r#"["service_name"]"#);
         let p = compile(&s);
         assert!(p.stacked);
-        assert!(p.table_sql.contains("GROUP BY service_name"));
+        // Groups are projected once and GROUP BY references the alias, so an
+        // attribute group's bound path `?` appears exactly once (DuckDB
+        // matches GROUP BY expressions syntactically, not by bound value).
+        assert!(p.table_sql.contains("service_name AS g0"));
+        assert!(p.table_sql.contains("GROUP BY g0"));
         assert!(p.table_sql.contains("ORDER BY m0 DESC"));
     }
 

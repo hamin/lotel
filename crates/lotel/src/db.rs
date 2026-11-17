@@ -339,6 +339,22 @@ mod tests {
         let _ = fs::remove_dir_all(&db.data_dir);
     }
 
+    /// The J0 fix (attribute JSON paths as bound parameters) rests on this:
+    /// DuckDB accepts the json_extract path itself as a `?` parameter, so a
+    /// hostile key never has to touch the SQL text.
+    #[test]
+    fn json_path_can_be_a_bound_parameter() {
+        let db = temp_db("json-path-param");
+        let (_, rows) = db
+            .query_rows_with(
+                r#"SELECT json_extract_string('{"a.b": "v"}', ?)"#,
+                &[&r#"$."a.b""#],
+            )
+            .expect("bound JSON path must execute");
+        assert_eq!(rows, vec![vec!["v".to_string()]]);
+        let _ = fs::remove_dir_all(&db.data_dir);
+    }
+
     /// An executed-but-empty result is not an error: column names still exist.
     #[test]
     fn empty_result_still_reports_columns() {
