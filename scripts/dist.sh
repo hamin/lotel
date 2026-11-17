@@ -54,11 +54,10 @@ cp -R licenses dist/stage/licenses
 say 'dist: cargo about generate THIRD-PARTY-LICENSES'
 cargo about generate about.hbs -o dist/stage/THIRD-PARTY-LICENSES
 
-# TODO(T4): scripts/install.sh becomes a required tarball member (DoD #4);
-# until it exists, stage it only when present.
-if [ -f scripts/install.sh ]; then
-    cp scripts/install.sh dist/stage/install.sh
-fi
+# M18 T4: install.sh is a required tarball member (DoD #4) — no tarball
+# without it.
+[ -f scripts/install.sh ] || die "scripts/install.sh missing — required tarball member (DoD #4)"
+cp scripts/install.sh dist/stage/install.sh
 
 # --- 4. Deterministic tar. Fixed mtime + pinned ownership + sorted member
 # order + gzip -n ⇒ byte-identical reruns on an unchanged tree.
