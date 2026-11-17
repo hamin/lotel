@@ -1,4 +1,5 @@
 /target
+/dist/
 lotel-data/
 crates/lotel/extensions/
 .crimson/

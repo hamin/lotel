@@ -18,6 +18,12 @@ fetch-extensions:
 build: fetch-extensions
     cargo build --release
 
+# M18 release engineering: build the tarball + SHA256SUMS under dist/ and
+# boot the tarball's own binary as an ingest sanity gate (refuses stubbed
+# extensions; see scripts/dist.sh).
+dist:
+    ./scripts/dist.sh
+
 # Dev loop
 run: fetch-extensions
     cargo run

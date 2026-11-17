@@ -1,0 +1,21 @@
+# cargo-about config — drives THIRD-PARTY-LICENSES in the release tarball
+# (scripts/dist.sh regenerates it on every `just dist`).
+#
+# Exactly the licenses the resolver selects for this Cargo.lock — i.e. the
+# ones actually present in the dependency tree and shipped below. OR-ed
+# alternatives a crate offers but we never pick (BSD-2-Clause on zerocopy,
+# BSL-1.0 on ryu, Unlicense on memchr, LGPL-2.1-or-later on r-efi) are
+# deliberately NOT accepted: if a `cargo update` ever makes one required,
+# cargo-about fails and `just dist` stops instead of shipping it unreviewed.
+# Copyleft (GPL/LGPL/AGPL/MPL/EPL/CDDL) is not and must not be accepted.
+accepted = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]

@@ -1,0 +1,34 @@
+THIRD-PARTY-LICENSES
+====================
+
+Every Rust crate linked into the lotel binary, with the license each is
+shipped under and its full text. lotel itself (Apache-2.0, whose full text
+is in LICENSE) appears in this list for completeness.
+
+Generated from Cargo.lock by `cargo about generate about.hbs` using
+about.toml — scripts/dist.sh regenerates it on every `just dist`, so it can
+never drift from the shipped binary. Do not edit by hand.
+
+Non-crate components (DuckDB, the otlp/fts extensions, fonts, uPlot) are
+listed in NOTICE; the DuckDB/otlp MIT texts are under licenses/.
+
+OVERVIEW
+--------
+{{#each overview}}
+  {{{name}}} — {{count}} crate(s)
+{{/each}}
+
+LICENSES
+--------
+{{#each licenses}}
+=== {{{name}}} ===
+
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+------------------------------------------------------------------------------
+{{/each}}
