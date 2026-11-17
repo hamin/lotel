@@ -15,7 +15,8 @@ use topcoat::{
 
 use crate::{
     db::Db,
-    logs::{LogFilters, fetch as fetch_logs, log_rows},
+    filters::Bar,
+    logs::{fetch as fetch_logs, log_rows},
     services::{build_live, sm_map},
     stats::{build_err, err_card},
 };
@@ -35,9 +36,10 @@ async fn live(cx: &Cx) -> Result<BoxView<'_>> {
     let q = parse_query_params::<LiveQuery>(cx).unwrap_or_default();
     match q.topic.as_str() {
         "logs" => {
-            let f = parse_query_params::<LogFilters>(cx).unwrap_or_default();
-            let rows = fetch_logs(db, &f).unwrap_or_default();
-            Ok(view! { log_rows(rows: rows) }.boxed())
+            // the fragment must filter exactly like the page it feeds
+            let bar = Bar::parse(topcoat::router::request::uri(cx).query().unwrap_or(""));
+            let rows = fetch_logs(db, &bar).unwrap_or_default();
+            Ok(view! { log_rows(rows: rows, bar: bar) }.boxed())
         }
         "map" => {
             let range = if q.range.is_empty() { "1h" } else { q.range.as_str() };

@@ -1,29 +1,98 @@
 //! Traces: recent spans, per-service latency, and a single-trace waterfall.
-
-use serde::Deserialize;
+//!
+//! The feed shares the logs page's filter bar (crate::filters): service,
+//! span name, status, min duration (ms) and attribute filters all AND
+//! together over the recent-spans list, the duration distribution and the
+//! p95 trend. The waterfall view of one trace is unfiltered by design.
 
 use topcoat::{
     Result,
     context::{Cx, context},
-    router::{page, parse_query_params},
+    router::{page, request::uri},
     view::{BoxView, Unescaped, View, ViewExt, component, view},
 };
 
 use crate::{
     db::Db,
+    filters::{Bar, TRACE_COLS, attr_field, range_field, service_field},
     stats,
     ui::{cell, thousands},
 };
 
-#[derive(Debug, Default, Deserialize)]
+/// The traces page's filter set: the shared bar plus this page's
+/// first-class fields (span name, status, min duration).
+#[derive(Debug, Clone)]
 pub struct TraceFilters {
-    #[serde(default)]
     pub trace: String,
-    #[serde(default)]
-    pub service: String,
     /// Select one span for the detail card on the waterfall view.
-    #[serde(default)]
     pub span: String,
+    pub service: String,
+    pub name: String,
+    /// "" | ok | error
+    pub status: String,
+    /// lower bound in milliseconds (text as typed; validated below)
+    pub mindur: String,
+    /// the shared model: time range and the `f` attribute filters
+    pub bar: Bar,
+}
+
+impl TraceFilters {
+    pub fn from(bar: Bar) -> Self {
+        Self {
+            trace: bar.get("trace").to_string(),
+            span: bar.get("span").to_string(),
+            service: bar.get("service").to_string(),
+            name: bar.get("name").to_string(),
+            status: bar.get("status").to_string(),
+            mindur: bar.get("mindur").to_string(),
+            bar,
+        }
+    }
+
+    fn mindur_bad(&self) -> bool {
+        !self.mindur.is_empty() && self.mindur.parse::<f64>().is_err()
+    }
+
+    /// Inline parse feedback shown next to the input — never a 500.
+    pub fn errors(&self) -> Vec<String> {
+        let mut errs = self.bar.attr_errors();
+        if self.mindur_bad() {
+            errs.push(format!(
+                "min duration must be a number of milliseconds, got '{}'",
+                self.mindur
+            ));
+        }
+        errs
+    }
+
+    /// The AND-joined conditions (without WHERE) over the span columns,
+    /// and their bound parameters in order of appearance. The feed, the
+    /// duration distribution and the p95 trend share them.
+    fn conds(&self) -> (Vec<String>, Vec<String>) {
+        let mut conds = Vec::new();
+        let mut params = Vec::new();
+        if !self.name.is_empty() {
+            conds.push("(\"name\" ILIKE '%' || ? || '%')".to_string());
+            params.push(self.name.clone());
+        }
+        match self.status.as_str() {
+            "error" => conds.push("status_code = 2".to_string()),
+            "ok" => conds.push("(status_code IS NULL OR status_code <> 2)".to_string()),
+            _ => {}
+        }
+        if !self.mindur.is_empty() && !self.mindur_bad() {
+            conds.push("duration_time_unix_nano >= CAST(? AS DOUBLE) * 1000000.0".to_string());
+            params.push(self.mindur.clone());
+        }
+        if !self.service.is_empty() {
+            conds.push("(service_name = ?)".to_string());
+            params.push(self.service.clone());
+        }
+        let (ac, ap) = self.bar.attr_conds(&TRACE_COLS);
+        conds.extend(ac);
+        params.extend(ap);
+        (conds, params)
+    }
 }
 
 /// One span of a trace, positioned for the waterfall.
@@ -92,7 +161,8 @@ fn dist_label(b: i64) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{dist_label, fmt_ms, kind_label, service_class};
+    use super::{TraceFilters, dist_label, fmt_ms, kind_label, service_class};
+    use crate::filters::Bar;
 
     #[test]
     fn durations_format_humably() {
@@ -128,6 +198,54 @@ mod tests {
                 "bad class for {s}"
             );
         }
+    }
+
+    #[test]
+    fn filters_grow_from_the_shared_bar() {
+        let f = TraceFilters::from(Bar::parse(
+            "trace=abc&span=de&service=cart&name=pay&status=error&mindur=250&f=http.method%3DPOST",
+        ));
+        assert_eq!(f.trace, "abc");
+        assert_eq!(f.span, "de");
+        assert_eq!(f.service, "cart");
+        assert_eq!(f.name, "pay");
+        assert_eq!(f.status, "error");
+        assert_eq!(f.mindur, "250");
+        assert_eq!(f.bar.attrs().len(), 1);
+
+        let (conds, params) = f.conds();
+        // name, status, min duration, service, one attribute filter (2 `?`)
+        assert_eq!(conds.len(), 5);
+        assert!(conds[0].starts_with("(\"name\" ILIKE"));
+        assert_eq!(conds[1], "status_code = 2");
+        assert_eq!(
+            conds[2],
+            "duration_time_unix_nano >= CAST(? AS DOUBLE) * 1000000.0"
+        );
+        assert_eq!(conds[3], "(service_name = ?)");
+        assert_eq!(params[0], "pay");
+        assert_eq!(params[1], "250");
+        assert_eq!(params[2], "cart");
+        assert_eq!(params[3], r#"$."http.method""#);
+        assert_eq!(params[4], "POST");
+    }
+
+    #[test]
+    fn status_ok_excludes_only_error_and_bad_duration_errors_inline() {
+        let f = TraceFilters::from(Bar::parse("status=ok"));
+        let (conds, params) = f.conds();
+        assert_eq!(conds, vec!["(status_code IS NULL OR status_code <> 2)".to_string()]);
+        assert!(params.is_empty());
+
+        let f = TraceFilters::from(Bar::parse("status=junk"));
+        assert!(f.conds().0.is_empty(), "unknown status values filter nothing");
+
+        let f = TraceFilters::from(Bar::parse("mindur=soon"));
+        assert!(f.conds().0.is_empty(), "an unparsable duration is skipped, not executed");
+        assert_eq!(f.errors().len(), 1);
+        assert!(f.errors()[0].contains("soon"));
+        // an empty bar is silent
+        assert!(TraceFilters::from(Bar::default()).errors().is_empty());
     }
 }
 
@@ -217,37 +335,89 @@ fn fetch_waterfall(db: &Db, trace: &str) -> anyhow::Result<(Vec<WaterfallSpan>, 
     Ok((ordered, total))
 }
 
+/// Distinct service names, for the bar's Service select.
+pub(crate) fn option_values(db: &Db) -> Vec<String> {
+    db.query_rows(
+        "SELECT DISTINCT service_name FROM otel.main.otlp_traces \
+         WHERE service_name IS NOT NULL AND service_name != '' ORDER BY 1",
+    )
+    .map(|(_, rows)| rows.into_iter().map(|r| r[0].clone()).collect())
+    .unwrap_or_default()
+}
+
+/// The recent-spans feed under the bar's filters: (columns, rows) with the
+/// start time, ms and status already rendered by SQL, as the page stitches
+/// them straight into cells.
+pub(crate) fn fetch_feed(db: &Db, f: &TraceFilters) -> anyhow::Result<(Vec<String>, Vec<Vec<String>>)> {
+    let cutoff = f.bar.cutoff();
+    let (conds, params) = f.conds();
+    let mut sql = String::from(
+        "SELECT start_time_unix_nano, service_name, name,
+                round(duration_time_unix_nano / 1000000.0, 2),
+                COALESCE(status_status_message, ''), trace_id, span_id
+         FROM otel.main.otlp_traces
+         WHERE start_time_unix_nano >= CAST(? AS TIMESTAMP)",
+    );
+    for c in &conds {
+        sql.push_str(&format!(" AND {c}"));
+    }
+    sql.push_str(" ORDER BY start_time_unix_nano DESC LIMIT 200");
+    let mut bind: Vec<&dyn duckdb::ToSql> = vec![&cutoff];
+    bind.extend(params.iter().map(|s| s as &dyn duckdb::ToSql));
+    db.query_rows_with(&sql, &bind)
+}
+
 #[page]
 async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
     let db = context::<Db>(cx);
-    let f = parse_query_params::<TraceFilters>(cx).unwrap_or_default();
+    let f = TraceFilters::from(Bar::parse(uri(cx).query().unwrap_or("")));
 
     if !f.trace.is_empty() {
         let (spans, total_ns) = fetch_waterfall(db, &f.trace).unwrap_or_default();
         let selected = spans.iter().find(|s| s.span_id == f.span).cloned();
+        let back = f.bar.href_without("/traces", &["trace", "span"]);
         return Ok(view! {
             trace_view(
                 trace: f.trace.clone(),
                 spans: spans,
                 total_ns: total_ns,
                 selected: selected,
+                back: back,
             )
         }
         .boxed());
     }
 
-    // Feed view: per-service latency + recent spans.
-    let spans = db
-        .query_rows_with(
-            "SELECT start_time_unix_nano, service_name, name,
-                    round(duration_time_unix_nano / 1000000.0, 2),
-                    COALESCE(status_status_message, ''), trace_id, span_id
-             FROM otel.main.otlp_traces
-             WHERE (? = '' OR service_name = ?)
-             ORDER BY start_time_unix_nano DESC LIMIT 200",
-            &[&f.service, &f.service],
-        )
-        .unwrap_or_else(|e| (vec!["error".into()], vec![vec![format!("{e}")]]));
+    // Feed view: per-service latency + recent spans, under the bar.
+    let (conds, params) = f.conds();
+    let (feed, dist) = {
+        let feed = fetch_feed(db, &f).unwrap_or_else(|e| {
+            (vec!["error".into()], vec![vec![format!("{e}")]])
+        });
+        // Duration histogram over the same window and filters as the feed.
+        let mut sql = String::from(
+            "WITH d AS (
+                SELECT duration_time_unix_nano AS ns FROM otel.main.otlp_traces
+                WHERE start_time_unix_nano >= CAST(? AS TIMESTAMP)",
+        );
+        for c in &conds {
+            sql.push_str(&format!(" AND {c}"));
+        }
+        sql.push_str(
+            " AND duration_time_unix_nano IS NOT NULL)
+             SELECT CASE
+                        WHEN ns < 1000000 THEN 0     WHEN ns < 5000000 THEN 1    WHEN ns < 10000000 THEN 2
+                        WHEN ns < 25000000 THEN 3    WHEN ns < 50000000 THEN 4   WHEN ns < 100000000 THEN 5
+                        WHEN ns < 250000000 THEN 6   WHEN ns < 500000000 THEN 7  WHEN ns < 1000000000 THEN 8
+                        ELSE 9 END AS b, count(*) AS n
+             FROM d GROUP BY 1 ORDER BY 1",
+        );
+        let cutoff = f.bar.cutoff();
+        let mut bind: Vec<&dyn duckdb::ToSql> = vec![&cutoff];
+        bind.extend(params.iter().map(|s| s as &dyn duckdb::ToSql));
+        let dist = db.query_rows_with(&sql, &bind).unwrap_or_default().1;
+        (feed, dist)
+    };
 
     let services = db
         .query_rows(
@@ -260,10 +430,12 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
         )
         .unwrap_or_else(|e| (vec!["error".into()], vec![vec![format!("{e}")]]));
 
-    // Latency analytics over the whole store (the feed has no range filter):
+    // Latency analytics over the current filters (the feed's own window):
     // an overall p95 trend, a per-service trend column, and a duration
     // histogram. One shared scale in the series hue keeps every sparkline comparable.
-    let (overall_p95, lat_series) = stats::latency_series(db, "all");
+    let range = if f.bar.get("range").is_empty() { "all" } else { f.bar.get("range") };
+    let (overall_p95, lat_series) = stats::latency_series_where(db, range, &conds, &params);
+    let interval = stats::interval_for(range).to_string();
     let max_p95 = lat_series
         .iter()
         .flat_map(|s| s.p95s.iter().copied())
@@ -288,21 +460,6 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
         stats::spark_svg(&overall_p95, 560.0, 44.0, "var(--color-accent-2)", max_p95)
     };
 
-    let dist = db
-        .query_rows_with(
-            "WITH d AS (
-                SELECT duration_time_unix_nano / 1000000.0 AS ms FROM otel.main.otlp_traces
-                WHERE (? = '' OR service_name = ?) AND duration_time_unix_nano IS NOT NULL)
-             SELECT CASE
-                        WHEN ms < 1 THEN 0   WHEN ms < 5 THEN 1    WHEN ms < 10 THEN 2
-                        WHEN ms < 25 THEN 3  WHEN ms < 50 THEN 4   WHEN ms < 100 THEN 5
-                        WHEN ms < 250 THEN 6 WHEN ms < 500 THEN 7  WHEN ms < 1000 THEN 8
-                        ELSE 9 END AS b, count(*) AS n
-             FROM d GROUP BY 1 ORDER BY 1",
-            &[&f.service, &f.service],
-        )
-        .unwrap_or_default()
-        .1;
     let dist_top = dist
         .iter()
         .filter_map(|r| r[1].parse::<f64>().ok())
@@ -317,9 +474,38 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
         })
         .collect();
 
+    let services_options = option_values(db);
+    let service = f.service.clone();
+    let name = f.name.clone();
+    let status = f.status.clone();
+    let mindur = f.mindur.clone();
+    let range_current = f.bar.get("range").to_string();
+    let raw_f = f.bar.raw_f();
+    let errors = f.errors();
+
     Ok(view! {
         <h1>"Traces"</h1>
         <p class="sub">"Spans land in the capped store with age-based retention; p95 comes straight from the segment files."</p>
+
+        <form class="filters" method="get" action="/traces">
+            service_field(options: services_options, current: service)
+            <label>"Span name"
+                <input type="search" name="name" placeholder="name contains…" value=(name.clone()) />
+            </label>
+            <label>"Status"
+                <select name="status">
+                    <option value="" if status.is_empty() { selected="selected" }>"all"</option>
+                    <option value="ok" if status == "ok" { selected="selected" }>"ok"</option>
+                    <option value="error" if status == "error" { selected="selected" }>"error"</option>
+                </select>
+            </label>
+            <label>"Min duration (ms)"
+                <input type="search" name="mindur" placeholder="0" value=(mindur.clone()) />
+            </label>
+            range_field(current: range_current)
+            attr_field(raw: raw_f, errors: errors)
+            <button type="submit">"Apply"</button>
+        </form>
 
         <div class="card lat">
             <div>
@@ -328,7 +514,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
                     <p class="muted">"No spans in the store yet."</p>
                 } else {
                     (Unescaped::new_unchecked(overall_spark))
-                    <p class="lat-cap">(stats::interval_for("all"))" buckets · the series hue, one shared scale across all sparklines on this page"</p>
+                    <p class="lat-cap">(interval.clone())" buckets · the series hue, one shared scale across all sparklines on this page"</p>
                 }
             </div>
             <div>
@@ -371,7 +557,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
                 <tr><th>"start"</th><th>"service"</th><th>"span"</th><th>"ms"</th><th>"status"</th><th>"trace"</th></tr>
             </thead>
             <tbody>
-                for row in &spans.1 {
+                for row in &feed.1 {
                     <tr>
                         <td class="muted">(cell(row, 0))</td>
                         <td>(cell(row, 1))</td>
@@ -395,6 +581,7 @@ async fn trace_view(
     spans: Vec<WaterfallSpan>,
     total_ns: i64,
     selected: Option<WaterfallSpan>,
+    back: String,
 ) -> Result<impl View> {
     let errors = spans.iter().filter(|s| s.is_error).count();
 
@@ -413,7 +600,7 @@ async fn trace_view(
                 <span class="badge info">"no errors"</span>
             }
         </p>
-        <p><a class="trace-link" href="/traces">"← all spans"</a></p>
+        <p><a class="trace-link" href=(back)>"← all spans"</a></p>
 
         if spans.is_empty() {
             <p class="muted">"No spans for this trace (or it has aged out)."</p>
@@ -471,4 +658,117 @@ async fn trace_view(
             }
         }
     })
+}
+
+// ————————————————————————————————————————————— DB fixtures ——————————————————————————————————————————————
+// The traces side of the shared-bar promise: filters return exactly the
+// expected rows from the fixture spans.
+
+#[cfg(test)]
+mod db_tests {
+    use super::{TraceFilters, fetch_feed};
+    use crate::filters::Bar;
+    use crate::logs::db_tests::temp_db;
+    use std::fs;
+
+    /// Two slow spans of one trace (POST /payments errors at 3.2 s under
+    /// checkout; the root span is ok at 3.9 s) and one fast cart span —
+    /// the shape of the OTLP fixtures the smoke test ingests.
+    fn seed_traces(db: &crate::db::Db) {
+        db.with_conn(|conn| {
+            conn.execute_batch(
+                "CREATE TABLE otel.main.otlp_traces(
+                    start_time_unix_nano TIMESTAMP, duration_time_unix_nano BIGINT,
+                    trace_id VARCHAR, span_id VARCHAR, parent_span_id VARCHAR,
+                    service_name VARCHAR, \"name\" VARCHAR, kind INTEGER,
+                    status_code INTEGER, status_status_message VARCHAR,
+                    resource_attributes VARCHAR, span_attributes VARCHAR)
+                 WITH (time_col = 'start_time_unix_nano', ttl = '3 days', max_bytes = '64MB');
+                 INSERT INTO otel.main.otlp_traces
+                    (start_time_unix_nano, duration_time_unix_nano, trace_id, span_id, parent_span_id,
+                     service_name, \"name\", kind, status_code, status_status_message, resource_attributes, span_attributes)
+                 VALUES
+                    ('2026-11-17 10:00:00', 3200000000, 't1', 'sp1', 'sp2',
+                     'checkout', 'POST /payments', 2, 2, 'gateway timeout',
+                     '{\"service.name\":\"checkout\"}', '{\"http.method\":\"POST\",\"http.status_code\":504}'),
+                    ('2026-11-17 09:59:59', 3900000000, 't1', 'sp2', '',
+                     'checkout', 'POST /checkout', 1, 0, '',
+                     '{\"service.name\":\"checkout\"}', '{}'),
+                    ('2026-11-17 10:00:01', 45000000, 't2', 'sp3', '',
+                     'cart', 'GET /cart', 2, 0, '',
+                     '{\"service.name\":\"cart\",\"deployment.environment\":\"prod\"}', '{\"http.method\":\"GET\"}');",
+            )?;
+            Ok(())
+        })
+        .expect("seed traces");
+    }
+
+    fn names(tag: &str, query: &str) -> Vec<String> {
+        let db = temp_db(tag);
+        seed_traces(&db);
+        let f = TraceFilters::from(Bar::parse(query));
+        let (_, rows) = fetch_feed(&db, &f).expect("filtered feed");
+        let mut out: Vec<String> = rows.into_iter().map(|r| r[2].clone()).collect();
+        out.sort();
+        let _ = fs::remove_dir_all(&db.data_dir);
+        out
+    }
+
+    #[test]
+    fn min_duration_returns_only_the_slow_spans() {
+        assert_eq!(
+            names("tr-mindur", "mindur=3500"),
+            vec!["POST /checkout".to_string()]
+        );
+        assert_eq!(
+            names("tr-mindur-all", "mindur=1"),
+            vec!["GET /cart".to_string(), "POST /checkout".to_string(), "POST /payments".to_string()]
+        );
+        // 3.2 s is exactly the payments span — inclusive lower bound
+        assert_eq!(
+            names("tr-mindur-exact", "mindur=3200"),
+            vec!["POST /checkout".to_string(), "POST /payments".to_string()]
+        );
+    }
+
+    #[test]
+    fn attribute_name_status_and_service_filters() {
+        assert_eq!(
+            names("tr-attr", "f=http.method%3DPOST"),
+            vec!["POST /payments".to_string()],
+            "the root span carries no attributes at all — only has-the-key rows match"
+        );
+        assert_eq!(
+            names("tr-attr-num", "f=http.status_code%3D504"),
+            vec!["POST /payments".to_string()]
+        );
+        assert_eq!(names("tr-name", "name=%2Fcart"), vec!["GET /cart".to_string()]);
+        assert_eq!(names("tr-status", "status=error"), vec!["POST /payments".to_string()]);
+        assert_eq!(
+            names("tr-status-ok", "status=ok"),
+            vec!["GET /cart".to_string(), "POST /checkout".to_string()]
+        );
+        assert_eq!(
+            names("tr-resource", "f=resource.deployment.environment%3Dprod"),
+            vec!["GET /cart".to_string()]
+        );
+        // body filters have no column on traces: skipped, not an error
+        assert_eq!(
+            names("tr-body-skip", "f=body.msg%3Danything"),
+            vec!["GET /cart".to_string(), "POST /checkout".to_string(), "POST /payments".to_string()]
+        );
+    }
+
+    #[test]
+    fn filters_and_and_bad_input_never_500s() {
+        assert_eq!(
+            names("tr-and", "mindur=1000&f=http.method%3DPOST&status=error&service=checkout"),
+            vec!["POST /payments".to_string()]
+        );
+        // junk min duration and a junk attribute line: everything stands
+        assert_eq!(
+            names("tr-junk", "mindur=soon&f=nonsense"),
+            vec!["GET /cart".to_string(), "POST /checkout".to_string(), "POST /payments".to_string()]
+        );
+    }
 }

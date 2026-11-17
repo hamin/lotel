@@ -104,6 +104,34 @@ check("claude code row",     "/logs", "claude_code.tool_result")
 check("claude code chips",   "/logs", "duration_ms")      # log_attributes chips
 check("row expansion",       "/logs", 'class="logx"')     # <details>, no JS
 
+# STEP 0: expandable rows carry a stable data-key so the live tail can keep
+# open <details> across a swap (LotelLive reads them by key).
+check("row data-key",        "/logs", "data-key=")
+_, lfrag = get("/api/live?topic=logs&range=all")
+assert "data-key=" in lfrag, "tail fragment rows must carry the data-key too"
+print("PASS  data-key on tail fragment rows")
+
+# J2: the shared filter bar. Attribute filters ride `f` params; parse errors
+# show inline next to the input, never as a 500.
+check("bar attribute box",   "/logs", 'name="f"')
+check("f filter equals",     "/logs?f=tool_name%3Dbash", "claude_code.tool_result")
+_, fb = get("/logs?f=tool_name%3Dbash")
+assert "payment authorized" not in fb, "f filter must narrow the list"
+assert "Query error" not in fb and "500" not in fb[:200]
+check("f filter resource",   "/logs?f=resource.deployment.environment%3Ddev", "cli starting")  # opencode resource only
+check("f filter body json",  "/logs?f=body.provider%3Danthropic", "session created")
+check("f filter array body", "/logs?f=body.version%3D2.3.0", "cli starting")
+check("f negation",          "/logs?f=tool_name%21%3Dbash", "logrows")
+_, nb = get("/logs?f=tool_name%21%3Dbash")
+assert "claude_code.tool_result" not in nb, "!= must drop the bash row"
+check("f parse error inline", "/logs?f=just-junk", 'class="ferr"')
+_, eb = get("/logs?f=just-junk")
+assert "payment authorized" in eb, "a junk filter line must not narrow or 500"
+check("chip is a filter link", "/logs", 'href="/logs?')
+_, cb = get("/logs")
+assert 'class="kchip" href=' in cb, "attribute chips must be plain GET links"
+print("PASS  shared attribute filters (equals / resource / body / != / inline errors)")
+
 # BM25 best matches: force a seal through the read-only SQL console (sidecar
 # index builds inside it), then poll for ranked hits from the sealed segments.
 seal_sql = urllib.parse.quote("SELECT * FROM capped_seal('otel', 'otlp_logs')")
@@ -133,6 +161,20 @@ check("waterfall tree", f"/traces?trace={trace}", "padding-left:")
 body = unesc(get(f"/traces?trace={trace}")[1])
 span = body.split("&span=")[1].split('"')[0]
 check("span detail",    f"/traces?trace={trace}&span={span}", "<pre>")
+
+# J2: the traces page shares the same filter bar; feed and p95 trend obey it.
+check("trace bar",        "/traces", 'name="mindur"')
+check("trace bar attrs",  "/traces", 'name="f"')
+_, mb = get("/traces?mindur=3500")
+assert "POST /checkout" in mb, "slow root span passes the 3.5s floor"
+assert "POST /payments" not in mb, "3.2s span must be cut by min duration"
+assert "Overall p95 per bucket" in mb, "trend card stays with the bar"
+_, tb = get("/traces?f=http.method%3DPOST&status=error")
+assert "POST /payments" in tb, "attribute+status filter keeps the error span"
+assert "POST /checkout" not in tb, "status=error must drop the ok span"
+_, jb = get("/traces?mindur=soon&f=nonsense-line")
+assert "Recent spans" in jb and 'class="ferr"' in jb, "bad input is inline, not a 500"
+print("PASS  traces shared bar: feed respects min duration, status and attributes")
 
 wait_for("metric catalog", "/metrics", "checkout.queue.depth")
 body = unesc(get("/metrics")[1])
@@ -256,10 +298,19 @@ assert "<!DOCTYPE" not in llogs, "live logs topic must render bare"
 assert "<tr>" in llogs and "cache miss ratio" in llogs, "live logs topic missing rows"
 print("PASS  /api/live?topic=logs (bare fragment)")
 
+# the tail fragment filters exactly like the page it feeds
+_, lfilt = get("/api/live?topic=logs&range=all&f=tool_name%3Dbash")
+assert "claude_code.tool_result" in lfilt and "payment authorized" not in lfilt, \
+    "live fragment must honour the bar's f filters"
+print("PASS  /api/live?topic=logs honours the filter bar")
+
 _, lpage = get("/logs")
 assert "LotelLive.sub" in lpage and 'id="logrows"' in lpage and "/api/live?topic=" in lpage, "logs live tail wiring missing"
 assert "TAIL_JS" not in lpage, "old TAIL_JS still present"
-print("PASS  logs live tail folded into LotelLive")
+# STEP 0: the swap keeps open <details> (by data-key) and yields to a text selection
+assert "querySelectorAll('details[data-key]')" in lpage, "live swap must track open details by data-key"
+assert "getSelection" in lpage, "live swap must skip while text inside the target is selected"
+print("PASS  logs live tail folded into LotelLive (open-details + selection guard)")
 
 check("storage ttl",    "/storage", "7d")
 check("storage segs",   "/storage", "Segments")

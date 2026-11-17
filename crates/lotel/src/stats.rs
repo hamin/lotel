@@ -236,18 +236,39 @@ pub struct SvcLatency {
 /// line connecting the observed buckets says "nothing was seen there",
 /// while a dip to 0 would falsely claim "everything was fast".
 pub fn latency_series(db: &Db, range: &str) -> (Vec<f64>, Vec<SvcLatency>) {
+    latency_series_where(db, range, &[], &[])
+}
+
+/// As [`latency_series`], narrowed by extra SQL conditions (already
+/// `AND`-ready, their `?` bound from `params`) — the traces filter bar
+/// drives the trend without a second query shape.
+pub fn latency_series_where(
+    db: &Db,
+    range: &str,
+    conds: &[String],
+    params: &[String],
+) -> (Vec<f64>, Vec<SvcLatency>) {
     let bucket = interval_for(range);
     let cut = cutoff_for(range);
     let since = |col: &str| -> String {
-        match &cut {
-            Some(_) => format!("WHERE {col} >= CAST(? AS TIMESTAMP)"),
-            None => String::new(),
+        let mut all: Vec<String> = Vec::new();
+        if cut.is_some() {
+            all.push(format!("{col} >= CAST(? AS TIMESTAMP)"));
+        }
+        all.extend_from_slice(conds);
+        if all.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", all.join(" AND "))
         }
     };
-    let params: Vec<&dyn duckdb::ToSql> = match &cut {
-        Some(c) => vec![c as &dyn duckdb::ToSql],
+    let mut all_params: Vec<String> = match &cut {
+        Some(c) => vec![c.clone()],
         None => vec![],
     };
+    all_params.extend_from_slice(params);
+    let params: Vec<&dyn duckdb::ToSql> =
+        all_params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
 
     let overall_sql = format!(
         "SELECT quantile_cont(duration_time_unix_nano / 1000000.0, 0.95) \

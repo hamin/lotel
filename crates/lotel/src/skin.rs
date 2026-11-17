@@ -226,6 +226,14 @@ label.tail input:checked::after { display: none; }
 }
 .filters label:not(.tail) { display: flex; flex-direction: column; gap: var(--space-3xs); font-size: var(--text-sm); color: var(--color-ink-2); font-weight: 600; }
 
+form.filters textarea { min-height: 3.4rem; resize: vertical; }
+.ferr {
+  font-size: var(--text-xs); font-weight: 400; color: var(--color-bad-ink); background: var(--color-bad-soft);
+  border: var(--line-w) solid var(--color-bad); border-radius: var(--r-ctl);
+  padding: var(--space-3xs) var(--space-xs); margin-top: var(--space-3xs);
+}
+a.kchip:hover { border-color: var(--color-ink-2); color: var(--color-ink); text-decoration: none; }
+
 
 .card { background: var(--color-paper); border: var(--card-line); border-radius: var(--r-card); padding: var(--space-md); margin: 0 0 var(--space-md); }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-sm); margin: 0 0 var(--space-xl); }

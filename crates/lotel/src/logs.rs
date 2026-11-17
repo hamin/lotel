@@ -1,151 +1,30 @@
 //! Logs explorer: filtered, tail-able view over otel.main.otlp_logs, with
 //! top-value facets and a BM25 "best matches" panel (capped_fts) when
 //! a text query is active.
+//!
+//! The filter bar itself — time range, service, free text, attribute
+//! filters — lives in [`crate::filters`] and is shared with the traces page;
+//! severity is this page's one first-class extra.
 
-use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use topcoat::{
     Result,
     context::{Cx, context},
-    router::{page, parse_query_params},
+    router::{page, request::uri},
     view::{View, component, view},
 };
 
 use crate::{
     db::Db,
+    filters::{Bar, LOG_COLS, attr_field, range_field, service_field},
     ui::{live_refresh, sev_class, thousands},
 };
 
-/// Query-string filters (`?q=&service=&severity=&range=&limit=`).
-#[derive(Debug, Default, Deserialize)]
-pub struct LogFilters {
-    #[serde(default)]
-    pub q: String,
-    #[serde(default)]
-    pub service: String,
-    #[serde(default)]
-    pub severity: String,
-    /// `1h` | `6h` | `24h` | `7d` | anything else = all time
-    #[serde(default)]
-    pub range: String,
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-impl LogFilters {
-    /// (cutoff timestamp for the WHERE, validated row cap)
-    fn bind(&self) -> (String, usize) {
-        let hours = match self.range.as_str() {
-            "1h" => Some(1),
-            "6h" => Some(6),
-            "24h" => Some(24),
-            "7d" => Some(24 * 7),
-            _ => None,
-        };
-        let cutoff = match hours {
-            Some(h) => chrono::Utc::now() - chrono::Duration::hours(h),
-            None => chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
-        };
-        let cutoff = cutoff.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string();
-        (cutoff, self.limit.unwrap_or(200).clamp(1, 2000))
-    }
-
-    /// Percent-encode one query-string component (filters, facet values).
-    fn enc(s: &str) -> String {
-        let mut out = String::new();
-        for b in s.bytes() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
-                    out.push(b as char)
-                }
-                _ => out.push_str(&format!("%{b:02X}")),
-            }
-        }
-        out
-    }
-
-    /// Link that toggles `param` to `value` (or off, when already `on`),
-    /// keeping the other active filters.
-    fn href_toggling(&self, param: &str, value: &str, on: bool) -> String {
-        let mut parts: Vec<String> = Vec::new();
-        if !self.q.is_empty() {
-            parts.push(format!("q={}", Self::enc(&self.q)));
-        }
-        if !self.range.is_empty() {
-            parts.push(format!("range={}", Self::enc(&self.range)));
-        }
-        for (name, active) in [("service", &self.service), ("severity", &self.severity)] {
-            if name == param {
-                if !on {
-                    parts.push(format!("{name}={}", Self::enc(value)));
-                }
-            } else if !active.is_empty() {
-                parts.push(format!("{name}={}", Self::enc(active)));
-            }
-        }
-        if parts.is_empty() {
-            "/logs".to_string()
-        } else {
-            format!("/logs?{}", parts.join("&"))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::LogFilters;
-
-    #[test]
-    fn all_time_cutoff_is_epoch() {
-        let f = LogFilters::default();
-        let (cutoff, limit) = f.bind();
-        assert_eq!(cutoff, "1970-01-01 00:00:00");
-        assert_eq!(limit, 200);
-    }
-
-    #[test]
-    fn range_and_limit_are_clamped() {
-        let f = LogFilters { range: "24h".into(), limit: Some(9999), ..Default::default() };
-        let (cutoff, limit) = f.bind();
-        assert_ne!(cutoff, "1970-01-01 00:00:00");
-        assert_eq!(limit, 2000);
-
-        let f = LogFilters { limit: Some(0), ..Default::default() };
-        assert_eq!(f.bind().1, 1);
-    }
-
-    #[test]
-    fn encoding_covers_the_boring_and_the_nasty() {
-        assert_eq!(LogFilters::enc("cart"), "cart");
-        assert_eq!(LogFilters::enc("cache miss"), "cache%20miss");
-        assert_eq!(LogFilters::enc("a&b=c"), "a%26b%3Dc");
-    }
-
-    #[test]
-    fn facet_links_keep_the_rest_of_the_query() {
-        let f = LogFilters {
-            q: "time out".into(),
-            service: "cart".into(),
-            severity: "ERROR".into(),
-            range: "6h".into(),
-            ..Default::default()
-        };
-        // turning one facet off drops it, keeps the others
-        assert_eq!(
-            f.href_toggling("severity", "ERROR", true),
-            "/logs?q=time%20out&range=6h&service=cart"
-        );
-        // switching to a value replaces the previous one
-        assert_eq!(
-            f.href_toggling("severity", "WARN", false),
-            "/logs?q=time%20out&range=6h&service=cart&severity=WARN"
-        );
-        // no filters at all yields a clean path
-        let empty = LogFilters::default();
-        assert_eq!(empty.href_toggling("service", "cart", false), "/logs?service=cart");
-        assert_eq!(empty.href_toggling("service", "cart", true), "/logs");
-    }
+    use super::{LogRow, RowView, chip_href, fnv1a};
+    use crate::filters::Bar;
 
     fn chips(v: &super::BodyView) -> Vec<(&str, &str)> {
         v.chips.iter().map(|c| (c.k.as_str(), c.v.as_str())).collect()
@@ -268,9 +147,63 @@ mod tests {
         assert!(v.chips.is_empty());
         assert!(v.attrs_json.expect("empty object still pretty-prints").contains("{}"));
     }
+
+    #[test]
+    fn chips_link_to_matching_bar_filters() {
+        let bar = Bar::parse("service=cart");
+        let body = r#"["cli starting","{\"version\":\"2.3.0\"}"]"#;
+        let v = super::render_body(body, r#"{"tool_name":"bash"}"#);
+        // a body chip carries the body. prefix so the filter reads the body
+        let href = chip_href(&v.chips[0], &bar).expect("body chip links");
+        assert!(href.starts_with("/logs?service=cart&f=body."), "{href}");
+        assert!(href.contains("%3D2.3.0"), "{href}");
+        // an attribute chip stays bare-key
+        let href = chip_href(&v.chips[1], &bar).expect("attr chip links");
+        assert!(href.contains("tool_name%3Dbash"), "{href}");
+        assert!(!href.contains("body."), "{href}");
+        // positional chips (#N) address nothing the filter language reads
+        let v = super::render_body(r#"["done",42]"#, "");
+        assert!(chip_href(&v.chips[0], &bar).is_none());
+    }
+
+    #[test]
+    fn chip_links_survive_values_that_look_like_syntax() {
+        let bar = Bar::parse("");
+        let v = super::render_body(r#"{"message":"m","expr":"a=b~c"}"#, "");
+        let href = chip_href(&v.chips[0], &bar).expect("chip links");
+        // the whole `key=value` is one percent-encoded f param
+        assert_eq!(href, "/logs?f=body.expr%3Da%3Db%7Ec");
+        // …which parses back to exactly this filter
+        let back = Bar::parse(&href["/logs?".len()..]);
+        assert_eq!(back.attrs().len(), 1);
+        assert_eq!(back.attrs()[0].key, "expr");
+        assert_eq!(back.attrs()[0].value, "a=b~c");
+    }
+
+    #[test]
+    fn row_data_keys_are_stable_and_distinct() {
+        let row = |time: &str, span: &str, body: &str| LogRow {
+            time: time.into(),
+            service: "svc".into(),
+            severity: "INFO".into(),
+            body: body.into(),
+            log_attributes: "{}".into(),
+            trace_id: String::new(),
+            span_id: span.into(),
+        };
+        let key = |r: &LogRow| RowView::new(r, &Bar::default()).data_key;
+        // same row, same key: that is what lets the live tail re-open it
+        assert_eq!(key(&row("t1", "s1", "b")), key(&row("t1", "s1", "b")));
+        // any identity part differing yields a new key
+        assert_ne!(key(&row("t1", "s1", "b")), key(&row("t2", "s1", "b")));
+        assert_ne!(key(&row("t1", "s2", "b")), key(&row("t1", "s1", "b")));
+        assert_ne!(key(&row("t1", "", "b1")), key(&row("t1", "", "b2")));
+        assert_eq!(fnv1a("same"), fnv1a("same"));
+    }
 }
 
 /// One rendered log line.
+#[derive(Clone)]
 pub struct LogRow {
     pub time: String,
     pub service: String,
@@ -278,26 +211,35 @@ pub struct LogRow {
     pub body: String,
     pub log_attributes: String,
     pub trace_id: String,
+    pub span_id: String,
 }
 
 /// Shared query for the page and the tail fragment endpoint.
-pub(crate) fn fetch(db: &Db, f: &LogFilters) -> anyhow::Result<Vec<LogRow>> {
-    let (cutoff, limit) = f.bind();
-    let (_, rows) = db.query_rows_with(
-        &format!(
-            "SELECT time_unix_nano, service_name, severity_text, body, COALESCE(log_attributes, ''), COALESCE(trace_id, '')
-             FROM otel.main.otlp_logs
-             WHERE time_unix_nano >= CAST(? AS TIMESTAMP)
-               AND (? = '' OR body ILIKE '%' || ? || '%')
-               AND (? = '' OR service_name = ?)
-               AND (? = '' OR upper(severity_text) = upper(?))
-             ORDER BY time_unix_nano DESC
-             LIMIT {limit}"
-        ),
-        &[
-            &cutoff, &f.q, &f.q, &f.service, &f.service, &f.severity, &f.severity,
-        ],
-    )?;
+pub(crate) fn fetch(db: &Db, f: &Bar) -> anyhow::Result<Vec<LogRow>> {
+    let cutoff = f.cutoff();
+    let limit = f.limit();
+    let q = f.get("q");
+    let service = f.get("service");
+    let severity = f.get("severity");
+    let (conds, attr_params) = f.attr_conds(&LOG_COLS);
+
+    let mut sql = "SELECT time_unix_nano, service_name, severity_text, body, COALESCE(log_attributes, ''), COALESCE(trace_id, ''), COALESCE(span_id, '')
+         FROM otel.main.otlp_logs
+         WHERE time_unix_nano >= CAST(? AS TIMESTAMP)
+           AND (? = '' OR body ILIKE '%' || ? || '%')
+           AND (? = '' OR service_name = ?)
+           AND (? = '' OR upper(severity_text) = upper(?))"
+        .to_string();
+    for c in &conds {
+        sql.push_str(&format!(" AND {c}"));
+    }
+    sql.push_str(&format!(" ORDER BY time_unix_nano DESC LIMIT {limit}"));
+
+    let mut params: Vec<&dyn duckdb::ToSql> =
+        vec![&cutoff, &q, &q, &service, &service, &severity, &severity];
+    params.extend(attr_params.iter().map(|s| s as &dyn duckdb::ToSql));
+
+    let (_, rows) = db.query_rows_with(&sql, &params)?;
     Ok(rows
         .into_iter()
         .map(|r| LogRow {
@@ -307,6 +249,7 @@ pub(crate) fn fetch(db: &Db, f: &LogFilters) -> anyhow::Result<Vec<LogRow>> {
             body: r[3].clone(),
             log_attributes: r[4].clone(),
             trace_id: r[5].clone(),
+            span_id: r[6].clone(),
         })
         .collect())
 }
@@ -336,31 +279,50 @@ pub(crate) struct Facet {
     pub values: Vec<FacetValue>,
 }
 
-/// Top values of severity_text / service_name over the current window.
-/// A facet ignores its own dimension's filter — while filtered to ERROR you
-/// still see the sibling severities, so one click can switch or clear.
-pub(crate) fn facets(db: &Db, f: &LogFilters) -> Vec<Facet> {
-    let (cutoff, _) = f.bind();
+/// Top values of severity_text / service_name over the current window,
+/// under the current free-text and attribute filters. A facet ignores its
+/// own dimension's filter — while filtered to ERROR you still see the
+/// sibling severities, so one click can switch or clear.
+pub(crate) fn facets(db: &Db, f: &Bar) -> Vec<Facet> {
+    let cutoff = f.cutoff();
+    let q = f.get("q");
+    let (conds, attr_params) = f.attr_conds(&LOG_COLS);
     [("Severity", "severity", "severity_text"), ("Service", "service", "service_name")]
         .into_iter()
         .map(|(title, param, column)| {
-            let (active, other_param, other_column) = if param == "severity" {
-                (f.severity.as_str(), "service", "service_name")
+            // a facet keeps the SIBLING's filter in the WHERE and reads its
+            // OWN filter only to mark the active row
+            let (active, other_column, other) = if param == "severity" {
+                (f.get("severity"), "service_name", f.get("service"))
             } else {
-                (f.service.as_str(), "severity", "severity_text")
+                (f.get("service"), "severity_text", f.get("severity"))
             };
-            let other_active = if other_param == "service" { &f.service } else { &f.severity };
             // column/param/other_column are our own constants, never input
-            let sql = format!(
+            // — the severity sibling compares like fetch does, case-insensitively
+            let other_cond = if param == "service" {
+                format!("upper({other_column}) = upper(?)")
+            } else {
+                format!("{other_column} = ?")
+            };
+            let mut sql = format!(
                 "SELECT {column}, count(*) FROM otel.main.otlp_logs
                  WHERE time_unix_nano >= CAST(? AS TIMESTAMP)
                    AND (? = '' OR body ILIKE '%' || ? || '%')
-                   AND (? = '' OR {other_column} = ?)
+                   AND (? = '' OR {other_cond})"
+            );
+            for c in &conds {
+                sql.push_str(&format!(" AND {c}"));
+            }
+            sql.push_str(&format!(
+                "
                    AND {column} IS NOT NULL AND {column} != ''
                  GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 6"
-            );
+            ));
+            let mut params: Vec<&dyn duckdb::ToSql> =
+                vec![&cutoff, &q, &q, &other, &other];
+            params.extend(attr_params.iter().map(|s| s as &dyn duckdb::ToSql));
             let rows = db
-                .query_rows_with(&sql, &[&cutoff, &f.q, &f.q, other_active, other_active])
+                .query_rows_with(&sql, &params)
                 .map(|(_, r)| r)
                 .unwrap_or_default();
             let top = rows
@@ -375,7 +337,7 @@ pub(crate) fn facets(db: &Db, f: &LogFilters) -> Vec<Facet> {
                     let width =
                         ((r[1].parse::<f64>().unwrap_or(0.0) / top) * 100.0).round() as u32;
                     FacetValue {
-                        href: f.href_toggling(param, &r[0], on),
+                        href: f.href_toggling("/logs", param, &r[0], on),
                         label: r[0].clone(),
                         count: r[1].clone(),
                         width,
@@ -402,30 +364,53 @@ pub(crate) struct RankRow {
 /// Top matches for `q` via capped_fts over the sealed, indexed segments.
 /// Err means "not ready" (no indexed segments yet); the caller degrades to a
 /// note, never an error page — the LIKE list below still covers everything.
-pub(crate) fn fetch_ranked(db: &Db, f: &LogFilters) -> anyhow::Result<Vec<RankRow>> {
-    let (cutoff, _) = f.bind();
+pub(crate) fn fetch_ranked(db: &Db, f: &Bar) -> anyhow::Result<Vec<RankRow>> {
+    let cutoff = f.cutoff();
+    let service = f.get("service");
+    let severity = f.get("severity");
+    let q = f.get("q");
     // table-function arguments must be constant at bind time, so q is quoted,
     // not parameterized; every user filter below still binds normally
-    let q = crate::db::quote(&f.q);
-    let (_, rows) = db.query_rows_with(
-        &format!(
-            "SELECT time_unix_nano, service_name, severity_text, body, COALESCE(trace_id, ''), score
-             FROM capped_fts('otel', 'otlp_logs', {q}, 64)
-             WHERE time_unix_nano >= ?
-               AND (? = '' OR service_name = ?)
-               AND (? = '' OR upper(severity_text) = upper(?))
-             ORDER BY score DESC
-             LIMIT 8"
-        ),
-        &[&cutoff, &f.service, &f.service, &f.severity, &f.severity],
-    )?;
+    let q_sql = crate::db::quote(q);
+    let (conds, attr_params) = f.attr_conds_aliased(&LOG_COLS, Some("lotel_a"));
+
+    let mut sql = format!(
+        "SELECT f.time_unix_nano, f.service_name, f.severity_text, f.body, COALESCE(f.trace_id, ''), f.score
+         FROM capped_fts('otel', 'otlp_logs', {q_sql}, 64) f
+         WHERE f.time_unix_nano >= ?
+           AND (? = '' OR f.service_name = ?)
+           AND (? = '' OR upper(f.severity_text) = upper(?))"
+    );
+    let mut params: Vec<&dyn duckdb::ToSql> =
+        vec![&cutoff, &service, &service, &severity, &severity];
+    if !conds.is_empty() {
+        // the sidecar carries no attribute columns, so an attribute filter
+        // narrows the ranked list through a semijoin against the store —
+        // EXISTS keeps one entry per hit even if identical rows differ only
+        // in the filtered bag
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM otel.main.otlp_logs lotel_a \
+               WHERE CAST(lotel_a.time_unix_nano AS VARCHAR) = CAST(f.time_unix_nano AS VARCHAR) \
+                 AND COALESCE(lotel_a.service_name, '') = COALESCE(f.service_name, '') \
+                 AND COALESCE(lotel_a.severity_text, '') = COALESCE(f.severity_text, '') \
+                 AND COALESCE(lotel_a.body, '') = COALESCE(f.body, '') \
+                 AND COALESCE(lotel_a.trace_id, '') = COALESCE(f.trace_id, '')",
+        );
+        for c in &conds {
+            sql.push_str(&format!(" AND {c}"));
+        }
+        sql.push(')');
+        params.extend(attr_params.iter().map(|s| s as &dyn duckdb::ToSql));
+    }
+    sql.push_str(" ORDER BY f.score DESC LIMIT 8");
+
+    let (_, rows) = db.query_rows_with(&sql, &params)?;
     Ok(rows
         .into_iter()
         .map(|r| RankRow {
             time: r[0].clone(),
             service: r[1].clone(),
             severity: r[2].clone(),
-            // same readable body as the table: the message, not the JSON shell
             body: render_body(&r[3], "").text,
             score: r[5]
                 .parse::<f64>()
@@ -463,10 +448,19 @@ const MESSAGE_KEYS: [&str; 2] = ["message", "msg"];
 /// follows in the store's sorted order.
 const PREFERRED_ATTR_KEYS: [&str; 4] = ["tool_name", "success", "duration_ms", "model"];
 
+/// Where a chip's key lives: body fields filter through `body.`, attribute
+/// fields through the bare key (see crate::filters).
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum ChipSrc {
+    Body,
+    Attrs,
+}
+
 /// One compact `key=value` chip under the main text.
 pub(crate) struct Chip {
     pub k: String,
     pub v: String,
+    pub src: ChipSrc,
 }
 
 /// What a row displays: main text, its chip line, and the pretty-printed
@@ -521,11 +515,12 @@ fn chip_value(v: &Value, decode: bool) -> String {
 
 /// Object entries as chips — in map order (the store writes keys sorted,
 /// serde keeps them sorted, so the row order is stable).
-fn entry_chips(map: &Map<String, Value>, decode: bool) -> Vec<Chip> {
+fn entry_chips(map: &Map<String, Value>, decode: bool, src: ChipSrc) -> Vec<Chip> {
     map.iter()
         .map(|(k, v)| Chip {
             k: k.clone(),
             v: chip_value(v, decode),
+            src,
         })
         .collect()
 }
@@ -562,10 +557,11 @@ fn render_body(body: &str, attrs: &str) -> BodyView {
                     _ => None,
                 };
                 match fields {
-                    Some((m, decode)) => chips.extend(entry_chips(&m, decode)),
+                    Some((m, decode)) => chips.extend(entry_chips(&m, decode, ChipSrc::Body)),
                     None => chips.push(Chip {
                         k: format!("#{i}"),
                         v: chip_value(e, true),
+                        src: ChipSrc::Body,
                     }),
                 }
             }
@@ -586,6 +582,7 @@ fn render_body(body: &str, attrs: &str) -> BodyView {
                 .map(|(k, v)| Chip {
                     k: k.clone(),
                     v: chip_value(v, true),
+                    src: ChipSrc::Body,
                 })
                 .collect();
             (text, chips)
@@ -597,7 +594,7 @@ fn render_body(body: &str, attrs: &str) -> BodyView {
     // best-known keys first, then the store's sorted remainder.
     let parsed_attrs = parse_json(attrs);
     if let Some(Value::Object(map)) = &parsed_attrs {
-        let mut attr_chips = entry_chips(map, true);
+        let mut attr_chips = entry_chips(map, true, ChipSrc::Attrs);
         attr_chips.sort_by(|a, b| {
             let rank = |c: &Chip| {
                 PREFERRED_ATTR_KEYS
@@ -625,38 +622,85 @@ fn render_body(body: &str, attrs: &str) -> BodyView {
     }
 }
 
+/// The plain link that adds a chip's filter to the bar (like the facet
+/// links). Positional chips (`#1`) address nothing the filter language reads,
+/// so they stay unlinked; a clipped value filters by substring instead of
+/// exact equality, since its tail is hidden.
+fn chip_href(c: &Chip, bar: &Bar) -> Option<String> {
+    use crate::filters::{AttrOp, AttrSource, canonical_of};
+    if c.k.starts_with('#') {
+        return None;
+    }
+    let source = match c.src {
+        ChipSrc::Body => AttrSource::Body,
+        ChipSrc::Attrs => AttrSource::Row,
+    };
+    let (op, v) = match c.v.strip_suffix('…') {
+        Some(clipped) => (AttrOp::Has, clipped),
+        None => (AttrOp::Eq, c.v.as_str()),
+    };
+    Some(bar.href_add_filter("/logs", &canonical_of(source, op, &c.k, v)))
+}
+
+/// FNV-1a over the body: enough entropy to tell two same-named rows apart
+/// in the live tail's open-details bookkeeping, cheap enough per row.
+fn fnv1a(s: &str) -> u64 {
+    s.bytes().fold(0xcbf2_9ce4_8422_2325, |acc, b| {
+        (acc ^ b as u64).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
 /// A row with its body pre-rendered, so the view only stitches strings.
 struct RowView {
     time: String,
     service: String,
     severity: String,
     text: String,
-    chips: Vec<Chip>,
+    chips: Vec<ChipView>,
     body_json: Option<String>,
     attrs_json: Option<String>,
     trace_id: String,
+    /// stable identity for the live tail: unchanged rows keep their open
+    /// <details> across a swap (see ui::LIVE_JS)
+    data_key: String,
+}
+
+/// One chip with the href that activates its filter.
+struct ChipView {
+    k: String,
+    v: String,
+    href: Option<String>,
 }
 
 impl RowView {
-    fn new(r: LogRow) -> Self {
+    fn new(r: &LogRow, bar: &Bar) -> Self {
         let v = render_body(&r.body, &r.log_attributes);
         Self {
-            time: r.time,
-            service: r.service,
-            severity: r.severity,
+            time: r.time.clone(),
+            service: r.service.clone(),
+            severity: r.severity.clone(),
             text: v.text,
-            chips: v.chips,
+            chips: v
+                .chips
+                .iter()
+                .map(|c| ChipView {
+                    k: c.k.clone(),
+                    v: c.v.clone(),
+                    href: chip_href(c, bar),
+                })
+                .collect(),
             body_json: v.body_json,
             attrs_json: v.attrs_json,
-            trace_id: r.trace_id,
+            trace_id: r.trace_id.clone(),
+            data_key: format!("{}|{}|{:016x}", r.time, r.span_id, fnv1a(&r.body)),
         }
     }
 }
 
 /// The table rows — also served bare by `/api/logs` for the tail poller.
 #[component]
-pub(crate) async fn log_rows(cx: &Cx, rows: Vec<LogRow>) -> Result<impl View> {
-    let rows: Vec<RowView> = rows.into_iter().map(RowView::new).collect();
+pub(crate) async fn log_rows(cx: &Cx, rows: Vec<LogRow>, bar: Bar) -> Result<impl View> {
+    let rows: Vec<RowView> = rows.iter().map(|r| RowView::new(r, &bar)).collect();
     Ok(view! {
         for row in rows {
             <tr>
@@ -665,7 +709,7 @@ pub(crate) async fn log_rows(cx: &Cx, rows: Vec<LogRow>) -> Result<impl View> {
                 <td><span class=(format!("badge {}", sev_class(&row.severity)))>(row.severity)</span></td>
                 <td class="logbody">
                     if row.body_json.is_some() || row.attrs_json.is_some() {
-                        <details class="logx">
+                        <details class="logx" data-key=(row.data_key)>
                             <summary class="logtext">(row.text.clone())</summary>
                             if let Some(j) = &row.body_json {
                                 <div class="lj-k">"body"</div>
@@ -682,7 +726,11 @@ pub(crate) async fn log_rows(cx: &Cx, rows: Vec<LogRow>) -> Result<impl View> {
                     if !row.chips.is_empty() {
                         <span class="logchips">
                             for c in &row.chips {
-                                <span class="kchip"><b>(c.k.clone())</b>"="(c.v.clone())</span>
+                                if let Some(h) = &c.href {
+                                    <a class="kchip" href=(h.clone())><b>(c.k.clone())</b>"="(c.v.clone())</a>
+                                } else {
+                                    <span class="kchip"><b>(c.k.clone())</b>"="(c.v.clone())</span>
+                                }
                             }
                         </span>
                     }
@@ -751,17 +799,18 @@ pub(crate) async fn ranked_panel(cx: &Cx, rows: Vec<RankRow>, note: Option<Strin
 #[page]
 async fn logs(cx: &Cx) -> Result<impl View> {
     let db = context::<Db>(cx);
-    let f = parse_query_params::<LogFilters>(cx).unwrap_or_default();
+    let bar = Bar::parse(uri(cx).query().unwrap_or(""));
 
-    let rows = fetch(db, &f).unwrap_or_default();
+    let rows = fetch(db, &bar).unwrap_or_default();
     let services = option_values(db, "service_name");
     let severities = option_values(db, "severity_text");
-    let facet_groups = facets(db, &f);
+    let facet_groups = facets(db, &bar);
 
-    let (ranked_rows, ranked_note) = if f.q.is_empty() {
+    let q = bar.get("q").to_string();
+    let (ranked_rows, ranked_note) = if q.is_empty() {
         (Vec::new(), None)
     } else {
-        match fetch_ranked(db, &f) {
+        match fetch_ranked(db, &bar) {
             Ok(rs) if !rs.is_empty() => (rs, None),
             Ok(_) => (
                 Vec::new(),
@@ -781,39 +830,31 @@ async fn logs(cx: &Cx) -> Result<impl View> {
         }
     };
 
+    let severity = bar.get("severity").to_string();
+    let service = bar.get("service").to_string();
+    let range = bar.get("range").to_string();
+    let raw_f = bar.raw_f();
+    let attr_errors = bar.attr_errors();
+
     Ok(view! {
         <h1>"Logs"</h1>
         <p class="sub">"Recent log records from the capped store. Tail updates in place."</p>
 
         <form class="filters" method="get" action="/logs">
-            <label>"Search"
-                <input type="search" name="q" placeholder="body contains…" value=(f.q.clone()) />
+            <label>"Body contains"
+                <input type="search" name="q" placeholder="body contains…" value=(q.clone()) />
             </label>
-            <label>"Service"
-                <select name="service">
-                    <option value="" if f.service.is_empty() { selected="selected" }>"all"</option>
-                    for s in &services {
-                        <option value=(s.clone()) if *s == f.service { selected="selected" }>(s.clone())</option>
-                    }
-                </select>
-            </label>
+            service_field(options: services, current: service)
             <label>"Severity"
                 <select name="severity">
-                    <option value="" if f.severity.is_empty() { selected="selected" }>"all"</option>
+                    <option value="" if severity.is_empty() { selected="selected" }>"all"</option>
                     for s in &severities {
-                        <option value=(s.clone()) if *s == f.severity { selected="selected" }>(s.clone())</option>
+                        <option value=(s.clone()) if *s == severity { selected="selected" }>(s.clone())</option>
                     }
                 </select>
             </label>
-            <label>"Time range"
-                <select name="range">
-                    <option value="1h" if f.range == "1h" { selected="selected" }>"1 hour"</option>
-                    <option value="6h" if f.range == "6h" { selected="selected" }>"6 hours"</option>
-                    <option value="24h" if f.range == "24h" { selected="selected" }>"24 hours"</option>
-                    <option value="7d" if f.range == "7d" { selected="selected" }>"7 days"</option>
-                    <option value="all" if !["1h", "6h", "24h", "7d"].contains(&f.range.as_str()) { selected="selected" }>"all"</option>
-                </select>
-            </label>
+            range_field(current: range)
+            attr_field(raw: raw_f, errors: attr_errors)
             <button type="submit">"Apply"</button>
             <label class="tail">
                 <input type="checkbox" id="tail-toggle" checked="checked" />
@@ -821,7 +862,7 @@ async fn logs(cx: &Cx) -> Result<impl View> {
             </label>
         </form>
 
-        if !f.q.is_empty() {
+        if !q.is_empty() {
             ranked_panel(rows: ranked_rows, note: ranked_note)
         }
 
@@ -832,10 +873,215 @@ async fn logs(cx: &Cx) -> Result<impl View> {
                 <tr><th>"time"</th><th>"service"</th><th>"severity"</th><th>"body"</th><th></th></tr>
             </thead>
             <tbody id="logrows">
-                log_rows(rows: rows)
+                log_rows(rows: rows, bar: bar.clone())
             </tbody>
         </table>
 
         live_refresh(topic: "logs".to_string(), target: "logrows".to_string(), toggle: "tail-toggle".to_string(), cadence: 3000)
     })
+}
+
+// ————————————————————————————————————————————— DB fixtures ——————————————————————————————————————————————
+// One filter round-trip per page against real capped tables: a shared
+// insert helper, then key=value on this page's columns must return exactly
+// the expected rows.
+
+#[cfg(test)]
+pub(crate) mod db_tests {
+    use super::{facets, fetch};
+    use crate::{config::Config, db::Db, filters::Bar};
+    use std::fs;
+
+    pub(crate) fn temp_db(tag: &str) -> Db {
+        let dir = std::env::temp_dir().join(format!("lotel-filters-test-{tag}"));
+        let _ = fs::remove_dir_all(&dir);
+        let cfg = Config {
+            host: "127.0.0.1".into(),
+            port: 0,
+            data_dir: dir,
+            extension_dir: None,
+            ttl_logs: "7 days".into(),
+            ttl_traces: "3 days".into(),
+            ttl_metrics: "30 days".into(),
+            max_bytes: "64MB".into(),
+            otlp_addr: "127.0.0.1:0".into(),
+            ingest_token: None,
+        };
+        Db::open(&cfg).expect("open temp db")
+    }
+
+    /// The log-side store: three rows whose bodies cover plain text, a JSON
+    /// object, and the opencode `[message, "<payload>"]` array.
+    pub(crate) fn seed_logs(db: &Db) {
+        db.with_conn(|conn| {
+            conn.execute_batch(
+                "CREATE TABLE otel.main.otlp_logs(
+                    time_unix_nano TIMESTAMP, trace_id VARCHAR, span_id VARCHAR,
+                    service_name VARCHAR, severity_text VARCHAR, body VARCHAR,
+                    resource_attributes VARCHAR, log_attributes VARCHAR)
+                 WITH (time_col = 'time_unix_nano', ttl = '7 days', max_bytes = '64MB');
+                 INSERT INTO otel.main.otlp_logs
+                    (time_unix_nano, trace_id, span_id, service_name, severity_text, body, resource_attributes, log_attributes)
+                 VALUES
+                    ('2026-11-17 10:00:00', 't1', 's1', 'claude-code', 'INFO',
+                     'claude_code.tool_result', '{\"service.name\":\"claude-code\",\"deployment.environment\":\"dev\"}',
+                     '{\"tool_name\":\"bash\",\"success\":true,\"duration_ms\":1500}'),
+                    ('2026-11-17 10:00:01', 't2', 's2', 'opencode', 'INFO',
+                     '[\"cli starting\",\"{\\\"version\\\":\\\"2.3.0\\\"}\"]', '{\"service.name\":\"opencode\"}', '{}'),
+                    ('2026-11-17 10:00:02', '', 's3', 'cart', 'WARN',
+                     'plain text that is not JSON at all', '{}', '{}');",
+            )?;
+            Ok(())
+        })
+        .expect("seed logs");
+    }
+
+    fn bodies(tag: &str, query: &str) -> Vec<String> {
+        let db = temp_db(tag);
+        seed_logs(&db);
+        let rows = fetch(&db, &Bar::parse(query)).expect("filtered fetch");
+        let mut out: Vec<String> = rows.into_iter().map(|r| r.body).collect();
+        out.sort();
+        let _ = fs::remove_dir_all(&db.data_dir);
+        out
+    }
+
+    #[test]
+    fn bare_key_filters_the_rows_own_attributes() {
+        assert_eq!(
+            bodies("bare", "f=tool_name%3Dbash"),
+            vec!["claude_code.tool_result".to_string()]
+        );
+        // the numeric attribute extracts as its text
+        assert_eq!(
+            bodies("bare-num", "f=duration_ms%3D1500"),
+            vec!["claude_code.tool_result".to_string()]
+        );
+        // a value that matches nothing returns nothing — not an error
+        assert!(bodies("bare-none", "f=tool_name%3Dnope").is_empty());
+    }
+
+    #[test]
+    fn negation_and_substring_operators() {
+        // != narrows to rows that HAVE the key with a different value
+        assert_eq!(
+            bodies("neg", "f=tool_name%21%3Dbash"),
+            Vec::<String>::new(),
+            "only one row has tool_name and it is bash"
+        );
+        assert_eq!(
+            bodies("neg-none", "f=session.id%7Eses"),
+            Vec::<String>::new(),
+            "no row has session.id at all"
+        );
+        assert_eq!(
+            bodies("has", "f=tool_name%7Eba"),
+            vec!["claude_code.tool_result".to_string()]
+        );
+    }
+
+    #[test]
+    fn resource_prefix_reads_resource_attributes() {
+        assert_eq!(
+            bodies("res", "f=resource.deployment.environment%3Ddev"),
+            vec!["claude_code.tool_result".to_string()]
+        );
+        assert_eq!(
+            bodies("res-svc", "f=resource.service.name%3Dopencode"),
+            vec!["[\"cli starting\",\"{\\\"version\\\":\\\"2.3.0\\\"}\"]".to_string()]
+        );
+    }
+
+    #[test]
+    fn body_prefix_reads_object_bodies_and_decoded_array_payloads() {
+        // JSON object body (J1's message field)
+        assert_eq!(
+            bodies("obj", "f=body.message%3Dnothing"),
+            Vec::<String>::new(),
+            "no seeded object body"
+        );
+        // the array body's payload string decoded one level — the exact
+        // field the chips show
+        assert_eq!(
+            bodies("arr", "f=body.version%3D2.3.0"),
+            vec!["[\"cli starting\",\"{\\\"version\\\":\\\"2.3.0\\\"}\"]".to_string()]
+        );
+        // a plain-text body never matches and never errors
+        assert!(bodies("arr-plain", "f=body.anything%3Dtext").is_empty());
+    }
+
+    #[test]
+    fn filters_and_together_with_the_first_class_fields() {
+        // attribute filter AND severity AND service
+        assert_eq!(
+            bodies("and", "f=tool_name%3Dbash&severity=info&service=claude-code"),
+            vec!["claude_code.tool_result".to_string()]
+        );
+        assert!(
+            bodies("and-no", "f=tool_name%3Dbash&severity=WARN").is_empty(),
+            "AND must reject the row"
+        );
+    }
+
+    #[test]
+    fn unparsable_filters_narrow_nothing_and_never_error() {
+        // junk is skipped (shown next to the input), valid lines still apply
+        let rows = {
+            let db = temp_db("logs-page-junk");
+            seed_logs(&db);
+            let out = fetch(&db, &Bar::parse("f=total-junk&f=tool_name%3Dbash"));
+            let _ = fs::remove_dir_all(&db.data_dir);
+            out.expect("junk filter must not 500")
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].body, "claude_code.tool_result");
+    }
+
+    #[test]
+    fn facets_keep_their_own_filter_off_the_where_and_on_the_rows() {
+        let db = temp_db("logs-facets");
+        seed_logs(&db);
+        let fac = facets(&db, &Bar::parse("severity=info"));
+
+        let sev = fac.iter().find(|x| x.title == "Severity").expect("severity facet");
+        let vals: Vec<(&str, &str, &str, bool)> = sev
+            .values
+            .iter()
+            .map(|v| (v.label.as_str(), v.count.as_str(), v.href.as_str(), v.on))
+            .collect();
+        // own filter off the WHERE: WARN keeps its count even though the
+        // page is narrowed to info
+        assert!(
+            vals.iter().any(|(l, c, _, _)| *l == "WARN" && *c == "1"),
+            "WARN stays offered with its true count: {vals:?}"
+        );
+        // own filter only marks the active row (case-insensitively)
+        assert!(
+            vals.iter().any(|(l, _, _, on)| *l == "INFO" && *on),
+            "the chosen value is highlighted: {vals:?}"
+        );
+        let warn = vals.iter().find(|(l, ..)| *l == "WARN").expect("WARN row");
+        assert_eq!(warn.2, "/logs?severity=WARN", "toggling replaces own");
+        // a sibling param rides along in the chip hrefs…
+        let both = Bar::parse("severity=info&f=tool_name%3Dbash")
+            .href_toggling("/logs", "severity", "WARN", false);
+        assert_eq!(both, "/logs?severity=WARN&f=tool_name%3Dbash");
+        // …and toggling the selected row off clears just that param
+        let off = Bar::parse("severity=info&service=opencode")
+            .href_toggling("/logs", "severity", "info", true);
+        assert_eq!(off, "/logs?service=opencode");
+
+        // the service facet keeps severity in its hrefs (sibling) and
+        // carries no service of its own (own filter off the links)
+        let svc = facets(&db, &Bar::parse("severity=info"));
+        let svc = svc.iter().find(|x| x.title == "Service").expect("service facet");
+        let oc = svc
+            .values
+            .iter()
+            .find(|v| v.label == "opencode")
+            .expect("opencode");
+        assert_eq!(oc.href, "/logs?severity=info&service=opencode");
+        assert!(!oc.on);
+        let _ = fs::remove_dir_all(&db.data_dir);
+    }
 }

@@ -495,6 +495,13 @@ mod tests {
 /// tab is hidden and when the toggle is off. This is the single client half of
 /// the freshness seam: swap its `fetch` for an `EventSource` to go push-based
 /// (the SaaS shape) without touching any page.
+///
+/// The swap keeps the reader's place: rows whose `<details>` stands open are
+/// remembered by their `data-key` (the server stamps every expandable row a
+/// key derived from its own data — time, span id, body hash — so the same row
+/// keeps the same key across refreshes) and re-opened after the swap; and the
+/// swap is skipped outright while text inside the target is selected, so a
+/// copy is never yanked away.
 pub(crate) const LIVE_JS: &str = r#"
 window.LotelLive=(function(){
   function sub(o){
@@ -504,9 +511,30 @@ window.LotelLive=(function(){
     var base='/api/live?topic='+encodeURIComponent(o.topic);
     var ms=o.cadence||5000, timer=null;
     function url(){ var s=window.location.search||''; return base+(s?'&'+s.replace(/^\?/,''):''); }
+    function selectedInTarget(){
+      var s=document.getSelection?document.getSelection():null;
+      if(!s||s.isCollapsed||!s.rangeCount) return false;
+      for(var n=s.anchorNode;n;n=n.parentNode) if(n===t) return true;
+      for(n=s.focusNode;n;n=n.parentNode) if(n===t) return true;
+      return false;
+    }
+    function openKeys(){
+      var m={}, ds=t.querySelectorAll('details[data-key]');
+      for(var i=0;i<ds.length;i++) if(ds[i].open) m[ds[i].getAttribute('data-key')]=1;
+      return m;
+    }
+    function restoreKeys(m){
+      var ds=t.querySelectorAll('details[data-key]');
+      for(var i=0;i<ds.length;i++) if(m[ds[i].getAttribute('data-key')]) ds[i].open=true;
+    }
     function tick(){
       if(document.hidden) return;
-      fetch(url(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(h){t.innerHTML=h;}).catch(function(){});
+      fetch(url(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(h){
+        if(selectedInTarget()) return;
+        var m=openKeys();
+        t.innerHTML=h;
+        restoreKeys(m);
+      }).catch(function(){});
     }
     function on(){ if(!timer){ t.setAttribute('data-live','on'); timer=setInterval(tick,ms); tick(); } }
     function off(){ if(timer){ clearInterval(timer); timer=null; } t.setAttribute('data-live','off'); }
