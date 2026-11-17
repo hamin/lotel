@@ -135,18 +135,60 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
     .boxed())
 }
 
+/// Bundled DuckDB release. The `duckdb` crate is pinned to the matching
+/// version (see Cargo.toml); a blob built against another release fails to
+/// LOAD at startup, so this compile-time stamp cannot silently drift.
+const DUCKDB_VERSION: &str = "2.0.0";
+
+/// Version the bundled capped blob reports through `capped_version()`.
+const CAPPED_VERSION: &str = "0.1.0";
+
+/// The one release stamp (M18 T1): printed by `lotel --version` and reused
+/// verbatim by the startup banner. The lotel version comes only from
+/// Cargo.toml; build.rs stamps the git SHA ("unknown" outside a checkout).
+fn version_line() -> String {
+    format!(
+        "lotel {} ({} · duckdb {DUCKDB_VERSION} · capped {CAPPED_VERSION})",
+        env!("CARGO_PKG_VERSION"),
+        env!("LOTEL_GIT_SHA"),
+    )
+}
+
+/// Compare a compile-time stamp against what the runtime reports. DuckDB's
+/// `version()` leads with a `v` (`v2.0.0`); it is stripped before comparing.
+/// `Some(detail)` naming both values when they differ, `None` when they agree.
+fn version_mismatch(expected: &str, runtime: &str) -> Option<String> {
+    let runtime = runtime.trim_start_matches('v');
+    (runtime != expected).then(|| format!("binary stamped {expected}, runtime reports {runtime}"))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Hand-rolled argument handling (no clap): --version answers before
+    // config, the store, or any port is touched.
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("{}", version_line());
+        return Ok(());
+    }
+
     let cfg = config::Config::from_env()?;
     let db = Db::open(&cfg)?;
+
+    // The stamp above is compile-time constants (--version must answer
+    // without opening the store), so cross-check them against the loaded
+    // runtime: a swapped or stale blob warns loudly on stderr but runs.
+    let duck = db.duckdb_version().ok().and_then(|v| version_mismatch(DUCKDB_VERSION, &v));
+    if let Some(detail) = duck {
+        eprintln!("lotel: warning: duckdb version mismatch — {detail}");
+    }
+    if let Some(detail) = version_mismatch(CAPPED_VERSION, &db.capped_version) {
+        eprintln!("lotel: warning: capped version mismatch — {detail}");
+    }
+
     let ing = ingest::start(&db, &cfg, &db.ext_dir)?;
 
-    println!(
-        "lotel: duckdb {} · capped {} · store {}",
-        db.duckdb_version()?,
-        db.capped_version,
-        db.data_dir_display()
-    );
+    println!("{}", version_line());
+    println!("lotel: store {}", db.data_dir_display());
     println!(
         "lotel: OTLP on {} (bearer token: {})",
         ing.listen_uri, ing.token
@@ -275,3 +317,36 @@ async fn home(cx: &Cx) -> Result<impl View> {
 fn otlp_http_url(listen_uri: &str) -> String {
     format!("http://{}", listen_uri.trim_start_matches("otlp:"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The DoD stamp: `lotel <ver> (<sha> · duckdb <v> · capped <v>)` — the
+    /// same string --version prints and the banner leads with.
+    #[test]
+    fn version_line_has_the_release_stamp_shape() {
+        let v = version_line();
+        let sha = v
+            .strip_prefix(&format!("lotel {} (", env!("CARGO_PKG_VERSION")))
+            .unwrap_or_else(|| panic!("must open with the crate version: {v}"))
+            .strip_suffix(&format!(" · duckdb {DUCKDB_VERSION} · capped {CAPPED_VERSION})"))
+            .unwrap_or_else(|| panic!("must close with the component stamp: {v}"));
+        assert!(!sha.is_empty(), "build.rs must stamp LOTEL_GIT_SHA");
+    }
+
+    /// The startup cross-check: DuckDB reports `v2.0.0` but the stamp says
+    /// `2.0.0` — agreement must be silent, drift must name both values.
+    #[test]
+    fn version_mismatch_strips_the_v_prefix_and_names_drift() {
+        assert_eq!(version_mismatch("2.0.0", "v2.0.0"), None);
+        assert_eq!(version_mismatch("2.0.0", "2.0.0"), None);
+        assert_eq!(version_mismatch("0.1.0", "0.1.0"), None);
+        assert_eq!(
+            version_mismatch("2.0.0", "v2.1.0").as_deref(),
+            Some("binary stamped 2.0.0, runtime reports 2.1.0")
+        );
+        assert!(version_mismatch("0.1.0", "").is_some(), "empty runtime is drift");
+    }
+}
+
