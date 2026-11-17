@@ -44,6 +44,17 @@ pub fn start(db: &Db, cfg: &Config, ext_dir: &std::path::Path) -> anyhow::Result
 
     let token = cfg.ingest_token.clone().unwrap_or_else(random_token);
     let listen = format!("otlp:{}", cfg.otlp_addr);
+    // The otlp extension refuses to bind anything but a loopback host unless
+    // the caller passes allow_other_hostname=true. Containers must publish
+    // the port (127.0.0.1 is unreachable from the host), so a non-loopback
+    // LOTEL_OTLP_ADDR is explicit operator intent — the ingest token still
+    // guards every request. Loopback hosts keep sending today's exact SQL and
+    // stay under the extension's default guard. Loopback set mirrors
+    // OtlpUri::IsLocal (duckdb-otlp): localhost / ::1 / all of 127.0.0.0/8.
+    let host = cfg.otlp_addr.rsplit_once(':').map_or("", |(h, _)| h);
+    let loopback = matches!(host.to_lowercase().as_str(), "localhost" | "::1")
+        || host.starts_with("127.");
+    let allow_other_sql = if loopback { "" } else { ", allow_other_hostname := true" };
 
     db.with_conn(|conn| {
         conn.execute_batch(&format!("LOAD {};", crate::db::quote(&otlp_path.to_string_lossy())))?;
@@ -64,9 +75,10 @@ pub fn start(db: &Db, cfg: &Config, ext_dir: &std::path::Path) -> anyhow::Result
             conn.execute_batch(&ddl)?;
         }
         conn.execute_batch(&format!(
-            "FROM otlp_serve('{}', token := '{}', catalog := 'otel');",
+            "FROM otlp_serve('{}', token := '{}', catalog := 'otel'{});",
             listen.replace('\'', "''"),
             token.replace('\'', "''"),
+            allow_other_sql,
         ))?;
         Ok(())
     })?;

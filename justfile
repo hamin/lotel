@@ -1,18 +1,14 @@
 # lotel task runner
 
-CAPPED_EXT := "../capped/build/release/extension/capped/capped.duckdb_extension"
-OTLP_EXT := "~/.duckdb/extensions/v2.0.0/osx_arm64/otlp.duckdb_extension"
-FTS_EXT := "~/.duckdb/extensions/v2.0.0/osx_arm64/fts.duckdb_extension"
-DEST := "crates/lotel/extensions"
+version := `awk -F'"' '/^version =/ {print $2; exit}' crates/lotel/Cargo.toml`
 
-# Copy the prebuilt extensions into the app for embedding.
-# capped: built from the sibling repo (`cd ../capped && GEN=ninja make release`).
-# otlp:   community extension, e.g. `duckdb -c "INSTALL otlp FROM community;"` fetches it.
+# Fetch the extension blobs embedded into the app (build.rs stubs missing
+# ones with zero bytes → a release built without these ingests nothing).
+# otlp/fts: pinned URLs + sha256 in extensions.lock, verified on every fetch.
+# capped: source build (no release yet) — $CAPPED_EXT or the sibling repo
+# (`cd ../capped && GEN=ninja make release`). See scripts/fetch-extensions.sh.
 fetch-extensions:
-    mkdir -p {{DEST}}
-    cp {{CAPPED_EXT}} {{DEST}}/capped.duckdb_extension
-    cp {{OTLP_EXT}} {{DEST}}/otlp.duckdb_extension
-    cp {{FTS_EXT}} {{DEST}}/fts.duckdb_extension
+    ./scripts/fetch-extensions.sh
 
 # Full release build (fetches the extension first)
 build: fetch-extensions
@@ -23,6 +19,12 @@ build: fetch-extensions
 # extensions; see scripts/dist.sh).
 dist:
     ./scripts/dist.sh
+
+# M18 T5: build the container image (lotel:<ver>). The build context is the
+# PARENT dir because capped builds from source in its own Docker stage;
+# lotel/Dockerfile.dockerignore keeps the context lean.
+docker:
+    docker build -f Dockerfile -t lotel:{{version}} ..
 
 # Dev loop
 run: fetch-extensions

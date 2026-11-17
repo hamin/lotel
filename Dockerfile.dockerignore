@@ -1,0 +1,33 @@
+# BuildKit ignore file for lotel/Dockerfile (used instead of a context-root
+# .dockerignore; the context is the repo's PARENT dir — `docker build -f
+# lotel/Dockerfile ..`). Patterns are relative to that context root.
+#
+# The build compiles exactly two trees: lotel/ and capped/. Everything else
+# — sibling projects, gigabytes of build output, and the .git internals
+# cmake doesn't need — stays on the host.
+
+*
+!lotel
+!capped
+
+# --- build outputs (every builder regenerates these from source) ----------
+lotel/target/
+lotel/dist/
+lotel/lotel-data/
+capped/build/
+capped/target/
+capped/duckdb_unittest_tempdir/
+**/target/
+**/build/
+**/node_modules/
+
+# --- host-built extension blobs: these are macOS binaries; the Linux image
+# --- must fetch/verify its own (build.rs would happily embed them).
+lotel/crates/lotel/extensions/
+
+# --- git internals: lotel/.git stays (build.rs stamps --version from it);
+# --- capped's build pins OVERRIDE_GIT_DESCRIBE=v2.0.0, so the vendored
+# --- duckdb / ci-tools checkouts don't need their .git directories.
+capped/.git/
+capped/duckdb/.git/
+capped/extension-ci-tools/.git/
