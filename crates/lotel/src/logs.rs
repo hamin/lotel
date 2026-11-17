@@ -3,6 +3,7 @@
 //! a text query is active.
 
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use topcoat::{
     Result,
@@ -145,6 +146,128 @@ mod tests {
         assert_eq!(empty.href_toggling("service", "cart", false), "/logs?service=cart");
         assert_eq!(empty.href_toggling("service", "cart", true), "/logs");
     }
+
+    fn chips(v: &super::BodyView) -> Vec<(&str, &str)> {
+        v.chips.iter().map(|c| (c.k.as_str(), c.v.as_str())).collect()
+    }
+
+    #[test]
+    fn opencode_array_body_splits_into_message_and_chips() {
+        let body = r#"["cli starting","{\"version\":\"2.3.0\",\"args\":[\"run\"]}"]"#;
+        let v = super::render_body(body, "");
+        assert_eq!(v.text, "cli starting");
+        // the payload string is decoded one level; its fields become chips,
+        // in stable map order (sorted — same order the store writes attrs in)
+        assert_eq!(chips(&v), [("args", "[\"run\"]"), ("version", "2.3.0")]);
+        // expandable: the pretty body keeps the full payload escaped one level
+        let pretty = v.body_json.expect("json body expands");
+        assert!(pretty.contains("cli starting") && pretty.contains("\\\"version\\\""));
+        assert!(v.attrs_json.is_none());
+    }
+
+    #[test]
+    fn object_body_uses_message_key_and_chips_the_rest() {
+        let v = super::render_body(r#"{"message":"session created","provider":"anthropic","tokens":1200}"#, "");
+        assert_eq!(v.text, "session created");
+        assert_eq!(chips(&v), [("provider", "anthropic"), ("tokens", "1200")]);
+
+        // "msg" is a message too
+        let v = super::render_body(r#"{"msg":"hi","code":7}"#, "");
+        assert_eq!(v.text, "hi");
+        assert_eq!(chips(&v), [("code", "7")]);
+
+        // no message key: the compact JSON is the text, fields still chip out
+        let v = super::render_body(r#"{"a":1}"#, "");
+        assert_eq!(v.text, r#"{"a":1}"#);
+        assert_eq!(chips(&v), [("a", "1")]);
+    }
+
+    #[test]
+    fn json_in_strings_decodes_exactly_one_level() {
+        // element decodes to an object; its "payload" string is itself JSON
+        // and must NOT decode a second time — it keeps its raw spelling.
+        let body = r#"["run","{\"payload\":\"{\\\"deep\\\": 1}\"}"]"#;
+        let v = super::render_body(body, "");
+        assert_eq!(v.text, "run");
+        assert_eq!(chips(&v), [("payload", "{\"deep\": 1}")]);
+    }
+
+    #[test]
+    fn non_object_array_elements_become_positional_chips() {
+        let v = super::render_body(r#"["done",42,"tail",["x"]]"#, "");
+        assert_eq!(v.text, "done");
+        assert_eq!(chips(&v), [("#1", "42"), ("#2", "tail"), ("#3", "[\"x\"]")]);
+    }
+
+    #[test]
+    fn non_json_and_json_scalars_render_verbatim() {
+        let v = super::render_body("gateway timeout after 3 retries", "");
+        assert_eq!(v.text, "gateway timeout after 3 retries");
+        assert!(v.chips.is_empty() && v.body_json.is_none() && v.attrs_json.is_none());
+
+        // valid JSON scalars are not "JSON bodies" — they stay plain text
+        let v = super::render_body("42", "");
+        assert_eq!(v.text, "42");
+        assert!(v.body_json.is_none());
+
+        // broken JSON is just text
+        let v = super::render_body("{\"message\":", "");
+        assert_eq!(v.text, "{\"message\":");
+        assert!(v.body_json.is_none());
+    }
+
+    #[test]
+    fn huge_body_truncates_safely() {
+        // past the parse cap: never parsed, no expansion, text clipped —
+        // multibyte input must not panic at the cut.
+        let body = format!("[\"{}\"]", "é".repeat(super::PARSE_LIMIT));
+        let v = super::render_body(&body, "");
+        assert!(v.body_json.is_none());
+        assert!(v.text.ends_with('…'));
+        assert!(v.text.chars().count() <= super::TEXT_LIMIT + 1);
+
+        // parseable but too long to display: text and pretty print both clip
+        let body = format!(r#"{{"message":"{}"}}"#, "ü".repeat(30_000));
+        let v = super::render_body(&body, "");
+        assert!(v.text.ends_with('…'));
+        assert!(v.text.chars().count() <= super::TEXT_LIMIT + 1);
+        let pretty = v.body_json.expect("still expands");
+        assert!(pretty.chars().count() <= super::PRE_LIMIT + 1);
+    }
+
+    #[test]
+    fn attribute_chips_are_capped_and_in_stable_order() {
+        let attrs = r#"{"tool_name":"bash","success":true,"duration_ms":1500,"model":"claude-sonnet-4-5","session.id":"ses_01","extra":"x"}"#;
+        let v = super::render_body("claude_code.tool_result", attrs);
+        assert_eq!(v.text, "claude_code.tool_result"); // plain body: verbatim
+        // best-known keys first (tool_name, success, duration_ms, model),
+        // the rest follow sorted — one-line budget of MAX_CHIPS
+        assert_eq!(chips(&v), [
+            ("tool_name", "bash"),
+            ("success", "true"),
+            ("duration_ms", "1500"),
+            ("model", "claude-sonnet-4-5"),
+        ]);
+        // the budget-dropped keys are still there in the expansion, pretty-printed
+        let pretty = v.attrs_json.expect("attributes expand");
+        assert!(pretty.contains("\"session.id\"") && pretty.contains("\n  \"extra\""));
+        assert!(v.body_json.is_none()); // plain body has nothing to pretty-print
+
+        // body fields claim the budget before attributes do
+        let v = super::render_body(r#"{"message":"m","a":1,"b":2,"c":3,"d":4}"#, attrs);
+        assert_eq!(chips(&v), [("a", "1"), ("b", "2"), ("c", "3"), ("d", "4")]);
+        assert_eq!(v.chips.len(), super::MAX_CHIPS);
+    }
+
+    #[test]
+    fn empty_attributes_render_like_no_attributes_at_all() {
+        let v = super::render_body("plain", "");
+        assert!(v.attrs_json.is_none() && v.chips.is_empty());
+        // the store keeps "{}" for attribute-less rows: nothing to chip or expand
+        let v = super::render_body("plain", "{}");
+        assert!(v.chips.is_empty());
+        assert!(v.attrs_json.expect("empty object still pretty-prints").contains("{}"));
+    }
 }
 
 /// One rendered log line.
@@ -153,6 +276,7 @@ pub struct LogRow {
     pub service: String,
     pub severity: String,
     pub body: String,
+    pub log_attributes: String,
     pub trace_id: String,
 }
 
@@ -161,7 +285,7 @@ pub(crate) fn fetch(db: &Db, f: &LogFilters) -> anyhow::Result<Vec<LogRow>> {
     let (cutoff, limit) = f.bind();
     let (_, rows) = db.query_rows_with(
         &format!(
-            "SELECT time_unix_nano, service_name, severity_text, body, COALESCE(trace_id, '')
+            "SELECT time_unix_nano, service_name, severity_text, body, COALESCE(log_attributes, ''), COALESCE(trace_id, '')
              FROM otel.main.otlp_logs
              WHERE time_unix_nano >= CAST(? AS TIMESTAMP)
                AND (? = '' OR body ILIKE '%' || ? || '%')
@@ -181,7 +305,8 @@ pub(crate) fn fetch(db: &Db, f: &LogFilters) -> anyhow::Result<Vec<LogRow>> {
             service: r[1].clone(),
             severity: r[2].clone(),
             body: r[3].clone(),
-            trace_id: r[4].clone(),
+            log_attributes: r[4].clone(),
+            trace_id: r[5].clone(),
         })
         .collect())
 }
@@ -300,7 +425,8 @@ pub(crate) fn fetch_ranked(db: &Db, f: &LogFilters) -> anyhow::Result<Vec<RankRo
             time: r[0].clone(),
             service: r[1].clone(),
             severity: r[2].clone(),
-            body: r[3].clone(),
+            // same readable body as the table: the message, not the JSON shell
+            body: render_body(&r[3], "").text,
             score: r[5]
                 .parse::<f64>()
                 .map(|s| format!("{s:.2}"))
@@ -310,16 +436,257 @@ pub(crate) fn fetch_ranked(db: &Db, f: &LogFilters) -> anyhow::Result<Vec<RankRo
         .collect())
 }
 
+// ——————————————————————————————————————————— readable JSON bodies ———————————————————————————————————————————
+// body and log_attributes arrive as VARCHAR: plain text, or JSON — an object,
+// or the `[message, "<payload>"]` array the agent CLIs (opencode, Claude
+// Code) send. When the body parses as an object or array the row shows its
+// message as the main text and the remaining fields as compact key=value
+// chips, and a <details> (no JS) expands to the pretty-printed JSON.
+// Non-JSON bodies render exactly as before: text only, no chips, no expansion.
+// Bodies above PARSE_LIMIT are never parsed — they render as clipped text, so
+// one runaway body can't stall the page.
+
+/// Largest body/attributes JSON we attempt to parse, per row, in bytes.
+const PARSE_LIMIT: usize = 1 << 20;
+/// Main text shown before an ellipsis, in chars.
+const TEXT_LIMIT: usize = 2_000;
+/// One chip value, in chars.
+const CHIP_LIMIT: usize = 96;
+/// Pretty-printed JSON inside the row's <details>, in chars.
+const PRE_LIMIT: usize = 20_000;
+/// Chips per row — more never fit on the line anyway.
+const MAX_CHIPS: usize = 4;
+/// The keys an object body may carry its message under, by preference.
+const MESSAGE_KEYS: [&str; 2] = ["message", "msg"];
+/// Attribute keys that earn first claim on the chip budget, best-known first
+/// (the Claude Code rows are unreadable without tool_name). Everything else
+/// follows in the store's sorted order.
+const PREFERRED_ATTR_KEYS: [&str; 4] = ["tool_name", "success", "duration_ms", "model"];
+
+/// One compact `key=value` chip under the main text.
+pub(crate) struct Chip {
+    pub k: String,
+    pub v: String,
+}
+
+/// What a row displays: main text, its chip line, and the pretty-printed
+/// blobs the <details> reveals (None = nothing to expand).
+struct BodyView {
+    text: String,
+    chips: Vec<Chip>,
+    body_json: Option<String>,
+    attrs_json: Option<String>,
+}
+
+/// Clip at a char boundary (never mid-multibyte) and mark the cut.
+fn clip(s: &str, limit: usize) -> String {
+    match s.char_indices().nth(limit) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
+/// Parse if small enough; only objects and arrays count as a JSON body —
+/// bare scalars (`42`, `true`) are just text, same as today.
+fn parse_json(s: &str) -> Option<Value> {
+    if s.is_empty() || s.len() > PARSE_LIMIT {
+        return None;
+    }
+    serde_json::from_str::<Value>(s)
+        .ok()
+        .filter(|v| v.is_array() || v.is_object())
+}
+
+/// A JSON value as compact chip text. When `decode` is set, a string that is
+/// itself JSON is decoded one level, so opencode's payload strings read as
+/// JSON, not as a wall of escapes; decoded content is never re-scanned.
+fn chip_value(v: &Value, decode: bool) -> String {
+    let raw = match v {
+        Value::String(s)
+            if decode && s.len() <= PARSE_LIMIT =>
+        {
+            match serde_json::from_str::<Value>(s) {
+                Ok(inner) if inner.is_object() || inner.is_array() => {
+                    serde_json::to_string(&inner).unwrap_or_else(|_| s.clone())
+                }
+                _ => s.clone(),
+            }
+        }
+        // strings are the text they are — never their quoted JSON form
+        Value::String(s) => s.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    };
+    clip(&raw, CHIP_LIMIT)
+}
+
+/// Object entries as chips — in map order (the store writes keys sorted,
+/// serde keeps them sorted, so the row order is stable).
+fn entry_chips(map: &Map<String, Value>, decode: bool) -> Vec<Chip> {
+    map.iter()
+        .map(|(k, v)| Chip {
+            k: k.clone(),
+            v: chip_value(v, decode),
+        })
+        .collect()
+}
+
+/// Split one row's body (+ its log_attributes) into main text, chips and
+/// the pretty-printed blobs for the expansion.
+fn render_body(body: &str, attrs: &str) -> BodyView {
+    let parsed = parse_json(body);
+    let (text, mut chips) = match &parsed {
+        Some(Value::Array(items)) => {
+            // The first string element is the message; the rest become fields,
+            // with string elements that are themselves JSON expanded into theirs.
+            let main = items.iter().position(Value::is_string);
+            let text = match main {
+                Some(i) => clip(items[i].as_str().unwrap_or_default(), TEXT_LIMIT),
+                None => clip(body, TEXT_LIMIT),
+            };
+            let mut chips = Vec::new();
+            for (i, e) in items.iter().enumerate() {
+                if main == Some(i) {
+                    continue;
+                }
+                // direct object elements sit one level under the body, so
+                // their string values may decode; content decoded from a
+                // string element may not — that would be two levels.
+                let fields = match e {
+                    Value::Object(m) => Some((m.clone(), true)),
+                    Value::String(s) if s.len() <= PARSE_LIMIT => {
+                        serde_json::from_str::<Value>(s)
+                            .ok()
+                            .and_then(|v| v.as_object().cloned())
+                            .map(|m| (m, false))
+                    }
+                    _ => None,
+                };
+                match fields {
+                    Some((m, decode)) => chips.extend(entry_chips(&m, decode)),
+                    None => chips.push(Chip {
+                        k: format!("#{i}"),
+                        v: chip_value(e, true),
+                    }),
+                }
+            }
+            (text, chips)
+        }
+        Some(Value::Object(map)) => {
+            let key = MESSAGE_KEYS
+                .iter()
+                .copied()
+                .find(|k| map.get(*k).is_some_and(|v| v.is_string()));
+            let text = match key {
+                Some(k) => clip(map[k].as_str().unwrap_or_default(), TEXT_LIMIT),
+                None => clip(&serde_json::to_string(map).unwrap_or_default(), TEXT_LIMIT),
+            };
+            let chips = map
+                .iter()
+                .filter(|(k, _)| key != Some(k.as_str()))
+                .map(|(k, v)| Chip {
+                    k: k.clone(),
+                    v: chip_value(v, true),
+                })
+                .collect();
+            (text, chips)
+        }
+        _ => (clip(body, TEXT_LIMIT), Vec::new()),
+    };
+
+    // log_attributes fill the chip budget after the body's own fields:
+    // best-known keys first, then the store's sorted remainder.
+    let parsed_attrs = parse_json(attrs);
+    if let Some(Value::Object(map)) = &parsed_attrs {
+        let mut attr_chips = entry_chips(map, true);
+        attr_chips.sort_by(|a, b| {
+            let rank = |c: &Chip| {
+                PREFERRED_ATTR_KEYS
+                    .iter()
+                    .position(|k| *k == c.k.as_str())
+                    .unwrap_or(PREFERRED_ATTR_KEYS.len())
+            };
+            (rank(a), &a.k).cmp(&(rank(b), &b.k))
+        });
+        for c in attr_chips {
+            if chips.len() >= MAX_CHIPS {
+                break;
+            }
+            chips.push(c);
+        }
+    }
+    chips.truncate(MAX_CHIPS);
+
+    let pretty = |v: &Value| clip(&serde_json::to_string_pretty(v).unwrap_or_default(), PRE_LIMIT);
+    BodyView {
+        text,
+        chips,
+        body_json: parsed.as_ref().map(pretty),
+        attrs_json: parsed_attrs.as_ref().map(pretty),
+    }
+}
+
+/// A row with its body pre-rendered, so the view only stitches strings.
+struct RowView {
+    time: String,
+    service: String,
+    severity: String,
+    text: String,
+    chips: Vec<Chip>,
+    body_json: Option<String>,
+    attrs_json: Option<String>,
+    trace_id: String,
+}
+
+impl RowView {
+    fn new(r: LogRow) -> Self {
+        let v = render_body(&r.body, &r.log_attributes);
+        Self {
+            time: r.time,
+            service: r.service,
+            severity: r.severity,
+            text: v.text,
+            chips: v.chips,
+            body_json: v.body_json,
+            attrs_json: v.attrs_json,
+            trace_id: r.trace_id,
+        }
+    }
+}
+
 /// The table rows — also served bare by `/api/logs` for the tail poller.
 #[component]
 pub(crate) async fn log_rows(cx: &Cx, rows: Vec<LogRow>) -> Result<impl View> {
+    let rows: Vec<RowView> = rows.into_iter().map(RowView::new).collect();
     Ok(view! {
         for row in rows {
             <tr>
                 <td class="muted">(row.time)</td>
                 <td>(row.service)</td>
                 <td><span class=(format!("badge {}", sev_class(&row.severity)))>(row.severity)</span></td>
-                <td class="logbody">(row.body)</td>
+                <td class="logbody">
+                    if row.body_json.is_some() || row.attrs_json.is_some() {
+                        <details class="logx">
+                            <summary class="logtext">(row.text.clone())</summary>
+                            if let Some(j) = &row.body_json {
+                                <div class="lj-k">"body"</div>
+                                <pre>(j.clone())</pre>
+                            }
+                            if let Some(a) = &row.attrs_json {
+                                <div class="lj-k">"log_attributes"</div>
+                                <pre>(a.clone())</pre>
+                            }
+                        </details>
+                    } else {
+                        <span class="logtext">(row.text.clone())</span>
+                    }
+                    if !row.chips.is_empty() {
+                        <span class="logchips">
+                            for c in &row.chips {
+                                <span class="kchip"><b>(c.k.clone())</b>"="(c.v.clone())</span>
+                            }
+                        </span>
+                    }
+                </td>
                 <td>
                     if !row.trace_id.is_empty() {
                         <a class="trace-link mono" href=(format!("/traces?trace={}", row.trace_id))>"trace"</a>

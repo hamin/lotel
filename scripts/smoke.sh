@@ -33,6 +33,11 @@ for s in logs traces metrics; do
         -H 'Content-Type: application/json' \
         --data "@testdata/$s.json" >/dev/null
 done
+# agent-style log bodies (JSON arrays/objects, Claude Code event rows)
+curl -fsS -X POST "http://127.0.0.1:14318/v1/logs" \
+    -H 'Authorization: Bearer lotel-smoke-token-0123456789' \
+    -H 'Content-Type: application/json' \
+    --data "@testdata/logs-agents.json" >/dev/null
 sleep 3
 
 python3 - <<'PY'
@@ -88,6 +93,16 @@ assert "<!DOCTYPE" not in body, "fragment endpoint must not carry the layout"
 check("log facets",     "/logs", 'class="facets"')
 check("facet bars",     "/logs", "facet-n")
 check("facet active",   "/logs?severity=ERROR", "facet-row on")
+
+# Agent-style bodies: JSON renders as message + key=value chips (no JS), and
+# a row expands via <details>. Non-JSON rows stay verbatim.
+wait_for("agents array body", "/logs", "cli starting")
+check("agents nested chip",  "/logs", "2.3.0")            # JSON-in-string decoded
+check("agents object body",  "/logs", "session created")
+check("agents object chips", "/logs", "anthropic")
+check("claude code row",     "/logs", "claude_code.tool_result")
+check("claude code chips",   "/logs", "duration_ms")      # log_attributes chips
+check("row expansion",       "/logs", 'class="logx"')     # <details>, no JS
 
 # BM25 best matches: force a seal through the read-only SQL console (sidecar
 # index builds inside it), then poll for ranked hits from the sealed segments.

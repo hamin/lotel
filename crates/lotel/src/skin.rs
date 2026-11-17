@@ -255,6 +255,26 @@ pre { background: var(--color-paper-2); border-radius: var(--r-ctl); padding: va
 .tw { overflow-x: auto; min-width: 0; }
 
 
+.logtext { display: block; }
+.logchips { display: flex; align-items: baseline; gap: var(--space-2xs); margin-top: var(--space-3xs); overflow: hidden; white-space: nowrap; }
+.kchip {
+  display: inline-flex; gap: var(--space-3xs); flex: none; max-width: 16rem; padding: 0 var(--space-xs);
+  border-radius: var(--r-chip); border: var(--line-w) solid var(--color-rule); background: var(--color-paper-2);
+  color: var(--color-ink-2); font-family: var(--font-mono); font-variation-settings: var(--fv-mono);
+  font-size: var(--text-xs); line-height: 1.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kchip b { color: var(--color-muted); font-weight: 600; }
+details.logx > summary { cursor: pointer; list-style: none; }
+details.logx > summary::-webkit-details-marker { display: none; }
+details.logx > summary::before {
+  content: ""; display: inline-block; margin-right: var(--space-2xs);
+  border-left: 5px solid var(--color-muted-2); border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+}
+details.logx[open] > summary::before { border-left-color: var(--color-ink-2); transform: rotate(90deg); }
+.lj-k { font-size: var(--text-xs); font-weight: 700; color: var(--color-muted); margin-top: var(--space-xs); }
+.logx pre { margin: var(--space-3xs) 0 0; max-height: 20rem; overflow: auto; }
+
+
 .badge {
   display: inline-flex; align-items: center; justify-content: center; min-width: 3.4rem; padding: 0 var(--space-xs);
   min-height: 22px; border-radius: var(--r-chip); font-family: var(--font-mono); font-variation-settings: var(--fv-mono);

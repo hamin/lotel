@@ -1,0 +1,71 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "opencode"}},
+          {"key": "deployment.environment", "value": {"stringValue": "dev"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {"name": "opencode.cli", "version": "2.3.0"},
+          "logRecords": [
+            {
+              "timeUnixNano": "1762700010000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {"arrayValue": {"values": [
+                {"stringValue": "cli starting"},
+                {"stringValue": "{\"version\":\"2.3.0\",\"args\":[\"run\"]}"}
+              ]}}
+            },
+            {
+              "timeUnixNano": "1762700011000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {"kvlistValue": {"values": [
+                {"key": "message", "value": {"stringValue": "session created"}},
+                {"key": "provider", "value": {"stringValue": "anthropic"}},
+                {"key": "tokens", "value": {"intValue": "1200"}}
+              ]}}
+            },
+            {
+              "timeUnixNano": "1762700012000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {"stringValue": "config loaded, no overrides"}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "claude-code"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {"name": "claude_code", "version": "1.0.0"},
+          "logRecords": [
+            {
+              "timeUnixNano": "1762700013000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {"stringValue": "claude_code.tool_result"},
+              "attributes": [
+                {"key": "tool_name", "value": {"stringValue": "bash"}},
+                {"key": "success", "value": {"boolValue": true}},
+                {"key": "duration_ms", "value": {"intValue": "1500"}},
+                {"key": "model", "value": {"stringValue": "claude-sonnet-4-5"}},
+                {"key": "session.id", "value": {"stringValue": "ses_01a2b3c4d5"}}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
