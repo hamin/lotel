@@ -80,7 +80,7 @@ def wait_for(name, path, want, timeout=30):
     sys.exit(1)
 
 check("health",         "/api/health", "ok")
-check("dashboard",      "/", "Store — capped tables")
+check("dashboard",      "/", "Store: capped tables")
 check("snippet",        "/", "http://127.0.0.1:14318")
 check("logs page",      "/logs", "logrows")
 check("logs search",    "/logs?q=gateway", "gateway timeout")
@@ -161,6 +161,11 @@ check("waterfall tree", f"/traces?trace={trace}", "padding-left:")
 body = unesc(get(f"/traces?trace={trace}")[1])
 span = body.split("&span=")[1].split('"')[0]
 check("span detail",    f"/traces?trace={trace}&span={span}", "<pre>")
+# M18 T7: span names ride the own class namecell (logbody's overflow-wrap:
+# anywhere starves the column to one char per line), and the status cell
+# always shows ok/unset/error — never blank.
+check("span name cell",   "/traces", 'class="namecell"')
+check("span status text", "/traces", ">unset<")
 
 # J2: the traces page shares the same filter bar; feed and p95 trend obey it.
 check("trace bar",        "/traces", 'name="mindur"')

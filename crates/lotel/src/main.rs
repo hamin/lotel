@@ -101,7 +101,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <title>"lotel — local OpenTelemetry"</title>
+                <title>"lotel: local OpenTelemetry"</title>
                 <style>(Unescaped::new_unchecked(CSS))</style>
             </head>
             <body>
@@ -236,7 +236,7 @@ async fn home(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         <h1>"Dashboard"</h1>
         <p class="sub">
-            "Local OpenTelemetry on capped DuckDB storage — telemetry that stays, then is forgotten on schedule."
+            "Local OpenTelemetry on capped DuckDB storage: telemetry that stays, then is forgotten on schedule."
         </p>
 
         <div class="grid">
@@ -248,7 +248,7 @@ async fn home(cx: &Cx) -> Result<impl View> {
             }
         </div>
 
-        <h2>"Error rate — traces · last hour"</h2>
+        <h2>"Error rate: traces · last hour"</h2>
         <label class="tail">
             <input type="checkbox" id="err-live-toggle" checked="checked" />
             "live"
@@ -258,7 +258,7 @@ async fn home(cx: &Cx) -> Result<impl View> {
         </div>
         live_refresh(topic: "err".to_string(), target: "err-live".to_string(), toggle: "err-live-toggle".to_string(), cadence: 10000)
 
-        <h2>"Ingest — otlp_serve"</h2>
+        <h2>"Ingest: otlp_serve"</h2>
         <table>
             <thead>
                 <tr>
@@ -278,7 +278,7 @@ async fn home(cx: &Cx) -> Result<impl View> {
             </tbody>
         </table>
 
-        <h2>"Store — capped tables"</h2>
+        <h2>"Store: capped tables"</h2>
         <table>
             <thead>
                 <tr>
@@ -303,7 +303,7 @@ async fn home(cx: &Cx) -> Result<impl View> {
             <tr><td>"DuckDB"</td><td>(db.duckdb_version().unwrap_or_else(|_| "?".into()))</td></tr>
             <tr><td>"capped-core"</td><td>(db.capped_version.clone())</td></tr>
             <tr><td>"data dir"</td><td><code>(db.data_dir_display())</code></td></tr>
-            <tr><td>"OTLP endpoint"</td><td><code>(ing.listen_uri.clone())</code>" — OTLP/HTTP, bearer-authenticated"</td></tr>
+            <tr><td>"OTLP endpoint"</td><td><code>(ing.listen_uri.clone())</code>", OTLP/HTTP, bearer-authenticated"</td></tr>
         </table>
 
         <h2>"Point your collector at it"</h2>

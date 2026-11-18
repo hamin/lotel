@@ -237,7 +237,7 @@ AddressSanitizer and runs the whole sqllogictest suite inside it. Full
 reference — gates, tunables, results, and the macOS allocator investigation —
 in [`docs/load-testing.md`](docs/load-testing.md). The full release ladder run
 against the 0.1.0 binary, with commands and results, is the QA record in
-`docs/release-checklist-0.1.0.md`.
+[`docs/release-checklist-0.1.0.md`](docs/release-checklist-0.1.0.md).
 
 One honest caveat, measured rather than guessed: on macOS, RSS after a
 traffic flood reads high (gigabytes) while the *live heap* is ~40 MB —

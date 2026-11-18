@@ -1311,7 +1311,7 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
     Ok(view! {
         <h1>"Explore"</h1>
         <p class="sub">
-            "Query the store as a guided builder or raw SQL. Filters, computations, and a breakdown over any column — attributes included."
+            "Query the store as a guided builder or raw SQL. Filters, computations, and a breakdown over any column, attributes included."
         </p>
 
         <div class="qtabs">

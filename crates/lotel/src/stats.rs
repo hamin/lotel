@@ -96,7 +96,7 @@ pub fn spark_svg(values: &[f64], w: f64, h: f64, color: &str, max: f64) -> Strin
     let pts = spark_points(values, w, h, max);
     if pts.is_empty() {
         return format!(
-            "<svg class=\"spark\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\"></svg>"
+            "<svg class=\"spark\" aria-hidden=\"true\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\"></svg>"
         );
     }
     let line = pts
@@ -109,7 +109,7 @@ pub fn spark_svg(values: &[f64], w: f64, h: f64, color: &str, max: f64) -> Strin
     let (lx, _) = pts[pts.len() - 1];
     let area = format!("{line} L{lx:.2},{h:.2} L{fx:.2},{h:.2} Z");
     format!(
-        "<svg class=\"spark\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" \
+        "<svg class=\"spark\" aria-hidden=\"true\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" \
          preserveAspectRatio=\"none\"><path class=\"spark-area\" d=\"{area}\" style=\"fill:{color}\"/> \
          <path class=\"spark-line\" d=\"{line}\" style=\"stroke:{color}\"/></svg>"
     )

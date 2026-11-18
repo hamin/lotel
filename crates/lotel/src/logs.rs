@@ -815,7 +815,7 @@ async fn logs(cx: &Cx) -> Result<impl View> {
             Ok(_) => (
                 Vec::new(),
                 Some(
-                    "Nothing indexed for this query yet — fresh rows are still being sealed; \
+                    "Nothing indexed for this query yet: fresh rows are still being sealed; \
                      the list below matches on raw text meanwhile."
                         .to_string(),
                 ),
@@ -823,7 +823,7 @@ async fn logs(cx: &Cx) -> Result<impl View> {
             Err(_) => (
                 Vec::new(),
                 Some(
-                    "Search index unavailable — the list below still matches on raw text."
+                    "Search index unavailable: the list below still matches on raw text."
                         .to_string(),
                 ),
             ),

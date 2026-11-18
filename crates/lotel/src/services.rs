@@ -304,7 +304,7 @@ pub(crate) fn build_live(db: &Db, range: &str) -> LiveInput {
 pub(crate) async fn sm_map(cx: &Cx, input: LiveInput) -> Result<impl View> {
     Ok(view! {
         if input.empty {
-            <p class="muted">"No spans in this window — send OTLP traffic or widen the range."</p>
+            <p class="muted">"No spans in this window: send OTLP traffic or widen the range."</p>
         } else {
             <div class="card sm-wrap">
                 <div class="sm-canvas" style=(input.canvas_style)>
@@ -316,8 +316,9 @@ pub(crate) async fn sm_map(cx: &Cx, input: LiveInput) -> Result<impl View> {
                                 <span class=(n.head_class)>"●"</span>
                                 <b>(n.name)</b>
                             </div>
-                            <div class="sm-stats">
-                                (n.spans)" spans · p50 "(n.p50)" / p95 "(n.p95)" ms · "
+                            <div class="sm-stats meta">
+                                <span class="seg">(n.spans)" spans"</span>
+                                <span class="seg">"p50 "(n.p50)" / p95 "(n.p95)" ms"</span>
                                 <span class=(n.err_class)>(n.err_text)</span>
                             </div>
                             <div class="sm-spark">(Unescaped::new_unchecked(n.spark))</div>
@@ -326,9 +327,12 @@ pub(crate) async fn sm_map(cx: &Cx, input: LiveInput) -> Result<impl View> {
                     }
                 </div>
             </div>
-            <p class="muted sm-updated">
-                (input.services_n)" services · "(input.edges_n)" edges · "(input.spans_n)" spans · "
-                <span class=(input.err_class)>(input.err_text)</span>" · "(input.updated)
+            <p class="muted sm-updated meta">
+                <span class="seg">(input.services_n)" services"</span>
+                <span class="seg">(input.edges_n)" edges"</span>
+                <span class="seg">(input.spans_n)" spans"</span>
+                <span class=(input.err_class)>(input.err_text)</span>
+                <span class="seg">(input.updated)</span>
             </p>
         }
     })
@@ -374,7 +378,7 @@ async fn services(cx: &Cx) -> Result<BoxView<'_>> {
 
         <h2>"Legend"</h2>
         <p class="muted sm-legend">
-            "Click a service to open its spans · the edge label is its call count · red means at least 2% errors · the error-rate trend rides red, the p95 trend the series hue, each on a shared scale."
+            "Click a service to open its spans. The edge label is its call count. Red means at least 2% errors. The error-rate trend rides red, the p95 trend the series hue, each on a shared scale."
         </p>
 
         live_refresh(topic: "map".to_string(), target: "sm-live".to_string(), toggle: "live-toggle".to_string(), cadence: 5000)

@@ -264,7 +264,7 @@ async fn metrics(cx: &Cx) -> Result<BoxView<'_>> {
                     <tr>
                         if row.len() == 7 {
                             <td><span class=(format!("badge {}", shape_badge(&row[0])))>(row[0].clone())</span></td>
-                            <td class="logbody">
+                            <td class="namecell">
                                 <a class="trace-link" href=(format!("/metrics?shape={}&name={}&service={}&chart=1", urlenc(&row[0]), urlenc(&row[1]), urlenc(&row[3])))>(row[1].clone())</a>
                             </td>
                             <td>(row[2].clone())</td>
@@ -367,10 +367,10 @@ async fn chart<'a>(
                 <span class="badge trace">(service.clone())</span>
             }
         </p>
-        <p class="muted">
-            (s[0].clone())" points · window "
-            (s[1].clone())" → "(s[2].clone())
-            " · raw points across all label sets"
+        <p class="muted meta">
+            <span class="seg">(s[0].clone())" points"</span>
+            <span class="seg">"window "(s[1].clone())" → "(s[2].clone())</span>
+            <span class="seg">"raw points across all label sets"</span>
         </p>
         <p><a class="trace-link" href="/metrics">"← all metrics"</a></p>
 

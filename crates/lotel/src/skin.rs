@@ -252,6 +252,8 @@ thead th {
 tbody td { padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--color-rule-2); vertical-align: top; font-variant-numeric: tabular-nums; }
 tbody tr:hover td { background: var(--color-paper-2); }
 td.logbody, .logbody:not(td) { font-family: var(--font-mono); font-variation-settings: var(--fv-mono); font-size: var(--text-sm); color: var(--color-ink); overflow-wrap: anywhere; }
+
+td.namecell, .namecell:not(td) { font-family: var(--font-mono); font-variation-settings: var(--fv-mono); font-size: var(--text-sm); color: var(--color-ink); overflow-wrap: break-word; min-width: 16ch; }
 td.muted { font-family: var(--font-mono); font-variation-settings: var(--fv-mono); font-size: var(--text-xs); white-space: nowrap; }
 a.trace-link {
   color: var(--color-ink); text-decoration: underline; text-decoration-color: var(--color-accent-2); text-decoration-thickness: 2px;
@@ -322,6 +324,8 @@ details.logx[open] > summary::before { border-left-color: var(--color-ink-2); tr
 .card.lat { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-lg); }
 .card.lat .spark { width: 100%; height: 56px; }
 .lat-cap, .sm-legend, .err-foot, .sm-updated { font-size: var(--text-sm); color: var(--color-muted); margin-top: var(--space-xs); }
+
+.meta .seg:not(:first-child) { border-left: 1px solid var(--color-rule); margin-left: var(--space-xs); padding-left: var(--space-xs); }
 .card.errcard { display: flex; flex-direction: column; gap: var(--space-sm); }
 .err-top { display: flex; align-items: center; gap: var(--space-lg); flex-wrap: wrap; }
 .err-now { display: flex; align-items: baseline; gap: var(--space-sm); color: var(--color-muted); font-size: var(--text-sm); }

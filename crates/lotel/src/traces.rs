@@ -147,14 +147,14 @@ fn fmt_ms(ns: i64) -> String {
 fn dist_label(b: i64) -> &'static str {
     match b {
         0 => "<1 ms",
-        1 => "1–5 ms",
-        2 => "5–10 ms",
-        3 => "10–25 ms",
-        4 => "25–50 ms",
-        5 => "50–100 ms",
-        6 => "100–250 ms",
-        7 => "250–500 ms",
-        8 => "500 ms–1 s",
+        1 => "1-5 ms",
+        2 => "5-10 ms",
+        3 => "10-25 ms",
+        4 => "25-50 ms",
+        5 => "50-100 ms",
+        6 => "100-250 ms",
+        7 => "250-500 ms",
+        8 => "500 ms-1 s",
         _ => "≥1 s",
     }
 }
@@ -183,8 +183,8 @@ mod tests {
     #[test]
     fn duration_buckets_read_left_to_right() {
         assert_eq!(dist_label(0), "<1 ms");
-        assert_eq!(dist_label(5), "50–100 ms");
-        assert_eq!(dist_label(8), "500 ms–1 s");
+        assert_eq!(dist_label(5), "50-100 ms");
+        assert_eq!(dist_label(8), "500 ms-1 s");
         assert_eq!(dist_label(9), "≥1 s");
         assert_eq!(dist_label(99), "≥1 s", "everything past a second lands in the last bucket");
     }
@@ -354,7 +354,11 @@ pub(crate) fn fetch_feed(db: &Db, f: &TraceFilters) -> anyhow::Result<(Vec<Strin
     let mut sql = String::from(
         "SELECT start_time_unix_nano, service_name, name,
                 round(duration_time_unix_nano / 1000000.0, 2),
-                COALESCE(status_status_message, ''), trace_id, span_id
+                CASE COALESCE(status_code, 0)
+                    WHEN 1 THEN 'ok'
+                    WHEN 2 THEN 'error' || COALESCE(': ' || NULLIF(status_status_message, ''), '')
+                    ELSE 'unset' END,
+                trace_id, span_id
          FROM otel.main.otlp_traces
          WHERE start_time_unix_nano >= CAST(? AS TIMESTAMP)",
     );
@@ -561,7 +565,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
                     <tr>
                         <td class="muted">(cell(row, 0))</td>
                         <td>(cell(row, 1))</td>
-                        <td class="logbody">(cell(row, 2))</td>
+                        <td class="namecell">(cell(row, 2))</td>
                         <td>(cell(row, 3))</td>
                         <td>(cell(row, 4))</td>
                         <td><a class="trace-link mono" href=(format!("/traces?trace={}", cell(row, 5)))>(cell(row, 6))</a></td>
@@ -587,13 +591,10 @@ async fn trace_view(
 
     Ok(view! {
         <h1>"Trace"</h1>
-        <p class="sub">
-            <span class="mono">(trace.clone())</span>
-            " · "
-            ((spans.len()).to_string())
-            " spans · "
-            (fmt_ms(total_ns))
-            " total · "
+        <p class="sub meta">
+            <span class="mono seg">(trace.clone())</span>
+            <span class="seg">((spans.len()).to_string())" spans"</span>
+            <span class="seg">(fmt_ms(total_ns))" total"</span>
             if errors > 0 {
                 <span class="badge error">(format!("{errors} errored"))</span>
             } else {
