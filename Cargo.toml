@@ -5,3 +5,8 @@ members = ["crates/lotel"]
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Dev builds compile the bundled DuckDB without debug info: it is ~3.4 GB per
+# copy with it, and nobody steps through DuckDB's C++. lotel keeps its own.
+[profile.dev.package.libduckdb-sys]
+debug = false
