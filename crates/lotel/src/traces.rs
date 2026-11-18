@@ -4,6 +4,10 @@
 //! span name, status, min duration (ms) and attribute filters all AND
 //! together over the recent-spans list, the duration distribution and the
 //! p95 trend. The waterfall view of one trace is unfiltered by design.
+//!
+//! [`fetch_waterfall`] and [`fetch_session_waterfall`] are `pub(crate)` for
+//! the agent session timeline (crate::agents, T4), which lays a session's
+//! spans out with the same tree and the same bars.
 
 use topcoat::{
     Result,
@@ -250,18 +254,52 @@ mod tests {
 }
 
 /// Fetch a trace and return (spans in waterfall order, total duration ns).
-fn fetch_waterfall(db: &Db, trace: &str) -> anyhow::Result<(Vec<WaterfallSpan>, i64)> {
+pub(crate) fn fetch_waterfall(db: &Db, trace: &str) -> anyhow::Result<(Vec<WaterfallSpan>, i64)> {
     let (_, rows) = db.query_rows_with(
-        "SELECT epoch_ns(start_time_unix_nano), duration_time_unix_nano, span_id,
-                COALESCE(parent_span_id, ''), service_name, name,
-                COALESCE(kind, 0), COALESCE(status_code, 0),
-                COALESCE(status_status_message, ''), COALESCE(span_attributes, '{}')
-         FROM otel.main.otlp_traces
-         WHERE trace_id = ?
-         ORDER BY start_time_unix_nano",
+        &format!("{WATERFALL_SELECT} trace_id = ? ORDER BY start_time_unix_nano"),
         &[&trace],
     )?;
+    Ok(waterfall_from_rows(rows))
+}
 
+/// Every span of one agent session, laid out like the trace waterfall.
+///
+/// The session id can ride any agent key in either attribute bag, so the
+/// predicate is the OR'd one `agents::session_attr_cols` builds (Claude Code
+/// `session.id`, Codex `conversation.id`/`thread.id`, opencode's resource
+/// `opencode.run`). A session spans several traces, so the tree — and with it
+/// `depth` — is per trace (a parent outside the fetched set is a root, which is
+/// what keeps each trace its own tree), while the bars share the one window
+/// the whole session covers.
+// The session page (T4) is the caller; until it lands nothing in the binary
+// reaches this, and `just lint` denies warnings.
+#[allow(dead_code)]
+pub(crate) fn fetch_session_waterfall(db: &Db, sid: &str) -> anyhow::Result<(Vec<WaterfallSpan>, i64)> {
+    let conds = crate::agents::session_attr_cols(&crate::agents::TRACE_COLS, None);
+    let params = crate::agents::session_attr_params(&crate::agents::TRACE_COLS, sid);
+    let bind: Vec<&dyn duckdb::ToSql> = params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
+    let (_, rows) = db.query_rows_with(
+        &format!(
+            "{WATERFALL_SELECT} ({}) ORDER BY start_time_unix_nano",
+            conds.join(" OR ")
+        ),
+        &bind,
+    )?;
+    Ok(waterfall_from_rows(rows))
+}
+
+/// The columns both waterfall queries read, in the order `waterfall_from_rows`
+/// expects them.
+const WATERFALL_SELECT: &str = "SELECT epoch_ns(start_time_unix_nano), duration_time_unix_nano, \
+     span_id, COALESCE(parent_span_id, ''), service_name, name, \
+     COALESCE(kind, 0), COALESCE(status_code, 0), \
+     COALESCE(status_status_message, ''), COALESCE(span_attributes, '{}') \
+     FROM otel.main.otlp_traces WHERE ";
+
+/// Position rows (as `WATERFALL_SELECT` returns them) in the waterfall:
+/// preorder DFS so every span follows its parent, children by start time, with
+/// offset and width as a share of the whole window.
+fn waterfall_from_rows(rows: Vec<Vec<String>>) -> (Vec<WaterfallSpan>, i64) {
     struct Node {
         idx: usize,
         start_ns: i64,
@@ -300,10 +338,13 @@ fn fetch_waterfall(db: &Db, trace: &str) -> anyhow::Result<(Vec<WaterfallSpan>, 
         .unwrap_or(0);
     let total = (max_end - min_start).max(1);
 
-    // Preorder DFS: each span after its parent, children by start time.
+    // Preorder DFS: each span after its parent, children by start time. The
+    // stack is LIFO, so both the roots and each sibling group go on reversed —
+    // a session is a forest (one tree per trace) and its roots must read in
+    // start order, not newest first.
     let mut ordered: Vec<WaterfallSpan> = Vec::with_capacity(rows.len());
     {
-        let mut stack: Vec<(Node, usize)> = roots.into_iter().map(|n| (n, 0)).collect();
+        let mut stack: Vec<(Node, usize)> = roots.into_iter().rev().map(|n| (n, 0)).collect();
         while let Some((node, depth)) = stack.pop() {
             let i = node.idx;
             let r = &rows[i];
@@ -332,7 +373,7 @@ fn fetch_waterfall(db: &Db, trace: &str) -> anyhow::Result<(Vec<WaterfallSpan>, 
             }
         }
     }
-    Ok((ordered, total))
+    (ordered, total)
 }
 
 /// Distinct service names, for the bar's Service select.
@@ -678,7 +719,7 @@ async fn trace_view(
 
 #[cfg(test)]
 mod db_tests {
-    use super::{TraceFilters, fetch_feed};
+    use super::{TraceFilters, fetch_feed, fetch_session_waterfall, fetch_waterfall};
     use crate::filters::Bar;
     use crate::logs::db_tests::temp_db;
     use std::fs;
@@ -782,5 +823,63 @@ mod db_tests {
             names("tr-junk", "mindur=soon&f=nonsense"),
             vec!["GET /cart".to_string(), "POST /checkout".to_string(), "POST /payments".to_string()]
         );
+    }
+
+    // ——— the session timeline (crate::agents, T4) reuses the same layout ———
+
+    /// One Claude Code session: `interaction → tool → tool.execution` is one
+    /// tree, so depth 0/1/2, in preorder, and the window is the session's own.
+    #[test]
+    fn session_waterfall_walks_each_trace_of_the_session() {
+        let db = temp_db("tr-session");
+        crate::agents::db_tests::seed_traces(&db);
+        let (spans, total) = fetch_session_waterfall(&db, "ses_cc").expect("session waterfall");
+        let shape: Vec<(&str, usize)> = spans.iter().map(|s| (s.name.as_str(), s.depth)).collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("claude_code.interaction", 0),
+                ("claude_code.tool", 1),
+                ("claude_code.tool.execution", 2),
+            ],
+            "preorder DFS, children after their parent, depth per trace tree"
+        );
+        assert_eq!(total, 3_000_000_000, "the root's 3 s is the whole session window");
+        assert_eq!(spans[0].offset_pct, 0.0);
+        assert!(
+            (spans[1].offset_pct - 1000.0 / 3000.0 * 100.0).abs() < 0.01,
+            "the tool span starts a second into a 3 s session: {}",
+            spans[1].offset_pct
+        );
+        assert_eq!(spans[2].ms, "800.0 ms");
+        assert!(
+            spans.iter().all(|s| s.service == "claude-code"),
+            "no other agent's spans ride along"
+        );
+        let _ = fs::remove_dir_all(&db.data_dir);
+    }
+
+    /// opencode has no session attribute at all — its spans are found by the
+    /// resource `opencode.run` and sit in two traces, so the session is a
+    /// forest: two roots, each with its own depth, on one shared window.
+    #[test]
+    fn session_waterfall_groups_a_forest_of_traces_by_start_time() {
+        let db = temp_db("tr-session-oc");
+        crate::agents::db_tests::seed_traces(&db);
+        let (spans, total) = fetch_session_waterfall(&db, "run_7").expect("run waterfall");
+        let shape: Vec<(&str, usize)> = spans.iter().map(|s| (s.name.as_str(), s.depth)).collect();
+        assert_eq!(
+            shape,
+            vec![("rpc.client", 0), ("http.request", 1), ("rpc.client", 0)],
+            "the second trace's root follows the first tree, in start order"
+        );
+        assert_eq!(total, 1_010_000_000, "10:00:03 → 10:00:04.01");
+        // the seed's own span carries no session key: no session finds it
+        assert!(fetch_session_waterfall(&db, "GET /cart").expect("nothing").0.is_empty());
+        // the single-trace waterfall is unchanged by the shared builder
+        let (one, one_total) = fetch_waterfall(&db, "t3").expect("trace waterfall");
+        assert_eq!(one.len(), 2);
+        assert_eq!(one_total, 40_000_000);
+        let _ = fs::remove_dir_all(&db.data_dir);
     }
 }

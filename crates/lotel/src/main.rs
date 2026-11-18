@@ -1,3 +1,8 @@
+// T1 lands the agent views' query layer and the shared render redactor; the
+// pages that call it are T3–T7, so until they do nothing here has a caller
+// outside its own tests. Remove the allow as the pages wire it up.
+#[allow(dead_code)]
+mod agents;
 mod api;
 mod assets;
 mod config;
