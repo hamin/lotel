@@ -132,6 +132,19 @@ _, cb = get("/logs")
 assert 'class="kchip" href=' in cb, "attribute chips must be plain GET links"
 print("PASS  shared attribute filters (equals / resource / body / != / inline errors)")
 
+# J3: an empty list under a time range narrower than all shows a one-line
+# hint linking to the same query at range=all (plain <a>, works with JS off).
+_, hb = get("/logs?range=1h&f=tool_name%3Dnothing-matches-this")
+assert "over all time" in hb and "range=all" in unesc(hb), "empty + narrow range must offer all time"
+assert "/logs?range=all&f=tool_name%3Dnothing-matches-this" in unesc(hb), "hint keeps the filters"
+_, hb = get("/logs?range=1h")
+assert "over all time" not in hb, "a list with rows needs no hint"
+_, hb = get("/traces?range=1h")
+assert "over all time" in hb and "range=all" in unesc(hb), "empty span feed must offer all time"
+_, hb = get("/traces?range=all&name=zzz-no-such-span")
+assert "over all time" not in hb, "range=all is already all: no hint"
+print("PASS  empty + narrow range links to the same query at range=all")
+
 # BM25 best matches: force a seal through the read-only SQL console (sidecar
 # index builds inside it), then poll for ranked hits from the sealed segments.
 seal_sql = urllib.parse.quote("SELECT * FROM capped_seal('otel', 'otlp_logs')")

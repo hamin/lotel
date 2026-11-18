@@ -8,6 +8,13 @@
 //! parsed body (J1): a JSON object body directly, or the JSON payload
 //! strings inside an `[message, "<payload>"]` array body.
 //!
+//! `!=` and `~` only ever consider rows that carry the key: a missing key
+//! extracts NULL and the row is skipped — the filter narrows, it never
+//! widens (see [`Bar::attr_conds`]). In `~` the value *is* the LIKE pattern,
+//! so `%` and `_` act as wildcards. The Explore builder names the same
+//! columns `@col:key`: its `@log_attributes:k` / `@span_attributes:k` are
+//! the bar's bare `k`, and `@resource_attributes:k` is the bar's `resource.k`.
+//!
 //! The page fields that stay first-class (severity on logs; span name,
 //! status, min duration on traces) are plain query params the pages read
 //! through [`Bar::get`] — the bar owns their URL round-tripping, the pages
@@ -205,6 +212,20 @@ pub struct Bar {
     attrs: Vec<AttrFilter>,
 }
 
+/// Seconds for a recognised time-range label; None for `all`, unset or junk
+/// (which all cutoff to the epoch).
+fn range_secs(range: &str) -> Option<i64> {
+    match range {
+        "15m" => Some(900),
+        "1h" => Some(3_600),
+        "6h" => Some(6 * 3_600),
+        "24h" => Some(24 * 3_600),
+        "7d" => Some(7 * 24 * 3_600),
+        "30d" => Some(30 * 24 * 3_600),
+        _ => None,
+    }
+}
+
 impl Bar {
     /// Parse a raw query string (`a=1&f=k%3Dv&f=x`). Repeated `f` keys stack
     /// (one attribute filter each); topcoat's serde query params cannot
@@ -266,20 +287,18 @@ impl Bar {
     /// had, widened to the full set `stats::cutoff_for` knows so the feed
     /// and the latency trends never disagree about one label.
     pub fn cutoff(&self) -> String {
-        let secs: Option<i64> = match self.get("range") {
-            "15m" => Some(900),
-            "1h" => Some(3_600),
-            "6h" => Some(6 * 3_600),
-            "24h" => Some(24 * 3_600),
-            "7d" => Some(7 * 24 * 3_600),
-            "30d" => Some(30 * 24 * 3_600),
-            _ => None,
-        };
+        let secs = range_secs(self.get("range"));
         let cutoff = match secs {
             Some(s) => chrono::Utc::now() - chrono::Duration::seconds(s),
             None => chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
         };
         cutoff.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string()
+    }
+
+    /// True when a time range narrower than `all` is set — the signal that
+    /// an empty list may just be the window (see [`empty_range_hint`]).
+    pub fn range_is_narrow(&self) -> bool {
+        range_secs(self.get("range")).is_some()
     }
 
     /// Validated row cap for the page feed.
@@ -383,8 +402,10 @@ impl Bar {
     /// Every read guards with `json_valid` — the store keeps VARCHAR, so a
     /// body or bag that is plain text must not reach `json_extract_string`.
     /// `=`/`!=` compare the extracted value; `~` is a case-insensitive
-    /// substring. A missing key extracts NULL, and `NULL = ?` / `NULL <> ?`
-    /// match nothing: the filter narrows, it never widens.
+    /// substring whose `%` and `_` act as LIKE wildcards (the value is the
+    /// pattern). A missing key extracts NULL, and `NULL = ?`, `NULL <> ?`
+    /// and `NULL ILIKE ?` all match nothing: every operator skips rows that
+    /// lack the key, so the filter narrows, it never widens.
     pub fn attr_conds(&self, cols: &AttrCols) -> (Vec<String>, Vec<String>) {
         self.attr_conds_aliased(cols, None)
     }
@@ -527,6 +548,27 @@ pub(crate) async fn attr_field(cx: &Cx, raw: String, errors: Vec<String>) -> Res
     })
 }
 
+/// One-line hint row for an empty feed shown when a time range narrower
+/// than `all` is set (the owner's chip-plus-1h empty page): the window is
+/// the likely suspect, so offer the same query at `range=all`. A plain
+/// `<a>` with the shared `muted` class — works with JS off, like the facets.
+#[component]
+pub(crate) async fn empty_range_hint(
+    cx: &Cx,
+    colspan: usize,
+    noun: &'static str,
+    href: String,
+) -> Result<impl View> {
+    Ok(view! {
+        <tr>
+            <td colspan=(colspan.to_string()) class="muted">
+                (format!("No {noun} in this time range. "))
+                <a href=(href)>"Search the same filters over all time"</a>
+            </td>
+        </tr>
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -639,6 +681,16 @@ mod tests {
         let bar = Bar::parse("");
         assert_eq!(bar.cutoff(), "1970-01-01 00:00:00");
         assert_eq!(bar.limit(), 200);
+    }
+
+    #[test]
+    fn narrow_range_is_the_one_the_empty_hint_acts_on() {
+        // only a range the cutoff actually honours counts as narrow
+        assert!(Bar::parse("range=1h").range_is_narrow());
+        assert!(Bar::parse("range=30d").range_is_narrow());
+        assert!(!Bar::parse("").range_is_narrow(), "no range cutoffs to all");
+        assert!(!Bar::parse("range=all").range_is_narrow());
+        assert!(!Bar::parse("range=junk").range_is_narrow(), "junk cutoffs to epoch like all");
     }
 
     #[test]

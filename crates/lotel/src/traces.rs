@@ -14,7 +14,7 @@ use topcoat::{
 
 use crate::{
     db::Db,
-    filters::{Bar, TRACE_COLS, attr_field, range_field, service_field},
+    filters::{Bar, TRACE_COLS, attr_field, empty_range_hint, range_field, service_field},
     stats,
     ui::{cell, thousands},
 };
@@ -423,6 +423,14 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
         (feed, dist)
     };
 
+    // An empty feed with a range narrower than all: the window is the likely
+    // suspect, so offer the same query at range=all (the logs page's hint).
+    let empty_hint = if feed.1.is_empty() && f.bar.range_is_narrow() {
+        Some(f.bar.href("/traces", &[("range", "all")]))
+    } else {
+        None
+    };
+
     let services = db
         .query_rows(
             "SELECT service_name, count(*) AS spans,
@@ -561,6 +569,9 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
                 <tr><th>"start"</th><th>"service"</th><th>"span"</th><th>"ms"</th><th>"status"</th><th>"trace"</th></tr>
             </thead>
             <tbody>
+                if let Some(h) = &empty_hint {
+                    empty_range_hint(colspan: 6, noun: "spans", href: h.clone())
+                }
                 for row in &feed.1 {
                     <tr>
                         <td class="muted">(cell(row, 0))</td>

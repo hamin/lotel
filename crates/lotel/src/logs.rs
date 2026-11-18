@@ -17,7 +17,7 @@ use topcoat::{
 
 use crate::{
     db::Db,
-    filters::{Bar, LOG_COLS, attr_field, range_field, service_field},
+    filters::{Bar, LOG_COLS, attr_field, empty_range_hint, range_field, service_field},
     ui::{live_refresh, sev_class, thousands},
 };
 
@@ -802,6 +802,15 @@ async fn logs(cx: &Cx) -> Result<impl View> {
     let bar = Bar::parse(uri(cx).query().unwrap_or(""));
 
     let rows = fetch(db, &bar).unwrap_or_default();
+    // An empty list with a range narrower than all: the window itself is the
+    // likely suspect (the owner hit chip + 1h = empty page), so offer the
+    // same query at range=all. Inside the tbody, so the live tail's swap
+    // clears the hint as soon as rows arrive.
+    let empty_hint = if rows.is_empty() && bar.range_is_narrow() {
+        Some(bar.href("/logs", &[("range", "all")]))
+    } else {
+        None
+    };
     let services = option_values(db, "service_name");
     let severities = option_values(db, "severity_text");
     let facet_groups = facets(db, &bar);
@@ -873,6 +882,9 @@ async fn logs(cx: &Cx) -> Result<impl View> {
                 <tr><th>"time"</th><th>"service"</th><th>"severity"</th><th>"body"</th><th></th></tr>
             </thead>
             <tbody id="logrows">
+                if let Some(h) = &empty_hint {
+                    empty_range_hint(colspan: 5, noun: "logs", href: h.clone())
+                }
                 log_rows(rows: rows, bar: bar.clone())
             </tbody>
         </table>

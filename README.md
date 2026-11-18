@@ -121,6 +121,23 @@ export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token lotel prints>"
   column, and the traces bar adds span name, status and a minimum duration. A
   line that won't parse is flagged inline, never a crash. The filter box spells
   the syntax back to you as its placeholder.
+
+  | write | matches |
+  | --- | --- |
+  | `key=value` | rows whose attribute `key` is exactly `value` |
+  | `key!=value` | rows that carry `key` with a different value |
+  | `key~text` | rows whose `key` contains `text`, case-insensitive; `%` and `_` act as wildcards |
+  | `resource.key=value` | the same against `resource_attributes` |
+  | `body.key=value` | the same against the parsed JSON body (logs only) |
+
+  One filter per line; they AND together. `!=` and `~` skip rows that lack
+  the key, so filters only ever narrow. Explore's builder names the same
+  reads `@col:key`: its `@log_attributes:k` / `@span_attributes:k` are the
+  bar's bare `k`, its `@resource_attributes:k` the bar's `resource.k`.
+  Typical lines for agent telemetry: `tool_name=Bash`, `success=false`,
+  `resource.service.name=opencode` — or straight as a URL:
+  `/logs?f=tool_name%3DBash&f=success%3Dfalse`. An empty list under a time
+  range narrower than all offers a link to the same query at `range=all`.
 - **Metric charts** — uPlot charts embedded in the binary (no CDN), per
   `(shape, name, service)`, plus server-rendered histogram distributions.
 - **Storage truth** — every segment on disk: rows, bytes, time window, TTL,
