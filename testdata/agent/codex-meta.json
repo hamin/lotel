@@ -1,0 +1,24 @@
+{
+  "source": "http://127.0.0.1:18096",
+  "dumped_at": "2026-11-18T17:50:07Z",
+  "services": [
+    "codex_exec"
+  ],
+  "limit": 5000,
+  "files": [
+    "logs.json",
+    "traces.json"
+  ],
+  "redaction": [
+    "prompt text / cli starting cmdline -> [REDACTED]",
+    "tool inputs/outputs and content keys -> [REDACTED]",
+    "home paths -> [redacted-path]",
+    "emails -> [redacted-email@example.invalid]",
+    "account ids/uuids/orgs -> [redacted-id]",
+    "machine names (host.name) -> [redacted-host]",
+    "exception.message/stacktrace -> [REDACTED]; plugin.name -> [redacted-name]",
+    "LAN IPs -> [redacted-ip]; URL-encoded home paths -> [redacted-path]",
+    "*request_id / *cf_ray keys and req_\u2026 values -> [redacted-id]",
+    "error.message -> [REDACTED]"
+  ]
+}
