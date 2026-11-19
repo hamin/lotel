@@ -15,6 +15,7 @@ mod logs;
 mod metrics;
 mod query;
 mod services;
+mod setup;
 mod skin;
 mod stats;
 mod storage;
@@ -83,6 +84,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
         "/sessions" => "Sessions",
         "/spend" => "Spend",
         "/tools" => "Tools",
+        "/setup" => "Setup",
         "/logs" => "Logs",
         "/traces" => "Traces",
         "/metrics" => "Metrics",
@@ -226,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
             .page(agents::sessions_page)
             .page(agents::spend_page)
             .page(agents::tools_page)
+            .page(setup::setup_page)
             .with(db)
             .with(ing)
             .with(cfg)

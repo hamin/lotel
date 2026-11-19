@@ -241,6 +241,8 @@ a.kchip:hover { border-color: var(--color-ink-2); color: var(--color-ink); text-
 
 
 .card { background: var(--color-paper); border: var(--card-line); border-radius: var(--r-card); padding: var(--space-md); margin: 0 0 var(--space-md); }
+
+.card > :first-child { margin-top: 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-sm); margin: 0 0 var(--space-xl); }
 .card.stat { margin: 0; padding: var(--space-md); box-shadow: var(--pop-s); display: flex; flex-direction: column-reverse; gap: var(--space-2xs); }
 .card.stat:first-child { background: var(--color-accent); }

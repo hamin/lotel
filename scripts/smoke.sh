@@ -582,6 +582,26 @@ assert "claude_code.tool" in sb6, "the spans link lists the tool's spans"
 _, lb6 = get("/logs?range=all&f=tool_name%3DBash")
 assert lb6.split('id="logrows"')[1].split("</tbody>")[0].count("<tr") > 0, "the logs link lists the tool's events"
 print("PASS  tools: joined name + outcome, p50/p95, failure badge")
+# M-Agents T7: /setup — this instance's endpoint + token in every block, the
+# Codex TOML parses, and no pane ever names an agent content gate.
+import html, tomllib
+GATES = ("OTEL_LOG_USER_PROMPTS", "OTEL_LOG_TOOL_DETAILS", "OTEL_LOG_TOOL_CONTENT", "OTEL_LOG_RAW_API_BODIES")
+def setup_block(tab):
+    _, b = get(f"/setup?tab={tab}")
+    for g in GATES:
+        assert g not in b, f"/setup?tab={tab} names {g}"
+    return html.unescape(b.split('class="setup-block">')[1].split("</pre>")[0])
+cc = setup_block("claude")
+for want in ("export CLAUDE_CODE_ENABLE_TELEMETRY=1", "export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:14318\n",
+             "Authorization=Bearer lotel-smoke-token-0123456789"):
+    assert want in cc, f"claude block lacks {want!r}"
+cfg = tomllib.loads(setup_block("codex"))["otel"]
+assert cfg["log_user_prompt"] is False and cfg["metrics_exporter"] == "none"
+assert cfg["trace_exporter"]["otlp-http"]["endpoint"] == "http://127.0.0.1:14318/v1/traces"
+assert cfg["exporter"]["otlp-http"]["headers"]["Authorization"] == "Bearer lotel-smoke-token-0123456789"
+run = setup_block("codex-run")
+assert "otel.log_user_prompt=false" in run and "http://127.0.0.1:14318/v1/logs" in run
+print("PASS  setup: endpoint + token in all three panes, Codex TOML parses, no content gates named")
 check("sessions empty", "/sessions?range=all&f=session.id%3Dnone", "No agent sessions")
 
 _, hb = get("/")
