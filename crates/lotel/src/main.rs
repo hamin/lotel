@@ -6,6 +6,7 @@ mod agents;
 mod api;
 mod assets;
 mod config;
+mod correlate;
 mod db;
 mod fields;
 mod filters;

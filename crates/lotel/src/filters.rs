@@ -429,6 +429,20 @@ impl Bar {
         };
         let mut conds = Vec::new();
         let mut params = Vec::new();
+        // `/logs?trace=<id>[&span=<id>]`: the logs of one trace (or span) —
+        // the link the waterfall and span card give. Logs only (the bag set
+        // with a body): on /traces `trace=` opens the waterfall, it never
+        // narrows the feed. Riding in here keeps the table, facets, Fields
+        // panel and ranked hits on the same selection.
+        if cols.body.is_some() {
+            for (param, col) in [("trace", "trace_id"), ("span", "span_id")] {
+                let v = self.get(param);
+                if !v.is_empty() {
+                    conds.push(format!("{} = ?", qualify(col)));
+                    params.push(v.to_string());
+                }
+            }
+        }
         for f in self.attrs() {
             if f.error.is_some() {
                 continue;
@@ -779,6 +793,17 @@ mod tests {
                 "miss".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn trace_and_span_params_narrow_logs_only() {
+        let bar = Bar::parse("trace=t1&span=s1&f=tool_name%3Dbash");
+        let (conds, params) = bar.attr_conds_aliased(&LOG_COLS, Some("a"));
+        assert_eq!(conds[..2], ["a.trace_id = ?".to_string(), "a.span_id = ?".to_string()]);
+        assert_eq!(params[..2], ["t1".to_string(), "s1".to_string()]);
+        // on /traces, trace= opens the waterfall: the feed's conds ignore it
+        let (tconds, _) = bar.attr_conds(&TRACE_COLS);
+        assert!(tconds.iter().all(|c| !c.contains("trace_id") && !c.contains("span_id")), "{tconds:?}");
     }
 
     #[test]

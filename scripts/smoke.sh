@@ -513,6 +513,19 @@ for sid in (CC_SID, CX_SID, "3e122abc"):
 print("PASS  f=session.id narrows the list for every agent's key, and the logs link lands")
 _, lb = get("/logs?range=all&f=session.id%3Dnone")
 assert "<tr" not in lb.split('id="logrows"')[1].split("</tbody>")[0], "an unknown session finds no logs"
+# Log <-> trace links: a trace with logs links to them (whole trace and the
+# selected span); /logs?trace= narrows to exactly those rows and links back.
+TR, SP = "db4c1d903e60737b19c678d31bf02a9a", "0fc994a7c16b904b"
+wb = unesc(wait_for("trace page links its logs", f"/traces?trace={TR}", "30 logs"))
+assert f"/logs?range=all&trace={TR}" in wb, "the trace header links /logs?trace="
+_, spb = get(f"/traces?trace={TR}&span={SP}")
+assert "27 logs" in spb and f"/logs?range=all&trace={TR}&span={SP}" in unesc(spb), "the span card links its own logs"
+_, ltb = get(f"/logs?range=all&trace={TR}")
+rows_html = ltb.split('id="logrows"')[1].split("</tbody>")[0]
+assert rows_html.count("<tr") == 30, f"trace-scoped /logs lists the trace's 30 logs, got {rows_html.count('<tr')}"
+assert "show all logs" in ltb and f'name="trace" value="{TR}"' in ltb, "scope is shown, clearable, and kept by the form"
+assert rows_html.count(f"/traces?trace={TR}") == 30, "each row links back to its stored trace"
+print("PASS  log <-> trace links: trace + span log counts, scoped /logs, links back")
 check("sessions empty", "/sessions?range=all&f=session.id%3Dnone", "No agent sessions")
 
 _, hb = get("/")

@@ -192,6 +192,7 @@ mod tests {
             log_attributes: "{}".into(),
             trace_id: String::new(),
             span_id: span.into(),
+            trace_stored: false,
         };
         let key = |r: &LogRow| RowView::new(r, &Bar::default()).data_key;
         // same row, same key: that is what lets the live tail re-open it
@@ -232,6 +233,7 @@ mod tests {
             log_attributes: attrs.into(),
             trace_id: String::new(),
             span_id: "s1".into(),
+            trace_stored: false,
         }
     }
 
@@ -317,6 +319,9 @@ pub struct LogRow {
     pub log_attributes: String,
     pub trace_id: String,
     pub span_id: String,
+    /// `trace_id` names a trace that is still stored — only then does the
+    /// row link to it (see [`crate::correlate::stored_traces`]).
+    pub trace_stored: bool,
 }
 
 impl LogRow {
@@ -335,6 +340,7 @@ impl LogRow {
             log_attributes: cfg.display(&self.log_attributes),
             trace_id: self.trace_id.clone(),
             span_id: self.span_id.clone(),
+            trace_stored: self.trace_stored,
         }
     }
 }
@@ -365,8 +371,10 @@ pub(crate) fn fetch(db: &Db, f: &Bar) -> anyhow::Result<Vec<LogRow>> {
     params.extend(attr_params.iter().map(|s| s as &dyn duckdb::ToSql));
 
     let (_, rows) = db.query_rows_with(&sql, &params)?;
+    let ids: Vec<&str> = rows.iter().map(|r| r[5].as_str()).collect();
+    let stored = crate::correlate::stored_traces(db, &ids);
     Ok(rows
-        .into_iter()
+        .iter()
         .map(|r| LogRow {
             time: r[0].clone(),
             service: r[1].clone(),
@@ -375,6 +383,7 @@ pub(crate) fn fetch(db: &Db, f: &Bar) -> anyhow::Result<Vec<LogRow>> {
             log_attributes: r[4].clone(),
             trace_id: r[5].clone(),
             span_id: r[6].clone(),
+            trace_stored: stored.contains(&r[5]),
         })
         .collect())
 }
@@ -532,6 +541,8 @@ pub(crate) fn fetch_ranked(db: &Db, f: &Bar, cfg: &Config) -> anyhow::Result<Vec
     sql.push_str(" ORDER BY f.score DESC LIMIT 8");
 
     let (_, rows) = db.query_rows_with(&sql, &params)?;
+    let ids: Vec<&str> = rows.iter().map(|r| r[4].as_str()).collect();
+    let stored = crate::correlate::stored_traces(db, &ids);
     Ok(rows
         .into_iter()
         .map(|r| RankRow {
@@ -543,7 +554,8 @@ pub(crate) fn fetch_ranked(db: &Db, f: &Bar, cfg: &Config) -> anyhow::Result<Vec
                 .parse::<f64>()
                 .map(|s| format!("{s:.2}"))
                 .unwrap_or_else(|_| r[5].clone()),
-            trace_id: r[4].clone(),
+            // a hit links to its trace only while that trace is stored
+            trace_id: if stored.contains(&r[4]) { r[4].clone() } else { String::new() },
         })
         .collect())
 }
@@ -818,7 +830,7 @@ impl RowView {
                 .collect(),
             body_json: v.body_json,
             attrs_json: v.attrs_json,
-            trace_id: r.trace_id.clone(),
+            trace_id: if r.trace_stored { r.trace_id.clone() } else { String::new() },
             data_key: format!("{}|{}|{:016x}", r.time, r.span_id, fnv1a(&r.body)),
         }
     }
@@ -840,7 +852,12 @@ pub(crate) async fn log_rows(cx: &Cx, rows: Vec<LogRow>, bar: Bar) -> Result<imp
             <tr>
                 <td class="muted">(row.time)</td>
                 <td>(row.service)</td>
-                <td><span class=(format!("badge {}", sev_class(&row.severity)))>(row.severity)</span></td>
+                <td>
+                    // Claude Code sends no severity: no empty pill
+                    if !row.severity.is_empty() {
+                        <span class=(format!("badge {}", sev_class(&row.severity)))>(row.severity)</span>
+                    }
+                </td>
                 <td class="logbody">
                     if row.body_json.is_some() || row.attrs_json.is_some() {
                         <details class="logx" data-key=(row.data_key)>
@@ -980,12 +997,26 @@ async fn logs(cx: &Cx) -> Result<impl View> {
     let range = bar.get("range").to_string();
     let raw_f = bar.raw_f();
     let attr_errors = bar.attr_errors();
+    // ?trace=[&span=]: the waterfall's "N logs" link narrowed this page
+    let trace = bar.get("trace").to_string();
+    let span = bar.get("span").to_string();
+    let trace_href = format!("/traces?trace={}{}", Bar::enc(&trace),
+        if span.is_empty() { String::new() } else { format!("&span={}", Bar::enc(&span)) });
+    let unscope = bar.href_without("/logs", &["trace", "span"]);
 
     Ok(view! {
         <h1>"Logs"</h1>
         <p class="sub">"Recent log records from the capped store. Tail updates in place."</p>
+        if !trace.is_empty() {
+            <p class="sub meta">
+                <span class="seg">"Logs of "<a class="mono" href=(trace_href)>(if span.is_empty() { format!("trace {trace}") } else { format!("span {span}") })</a></span>
+                <span class="seg"><a href=(unscope)>"show all logs"</a></span>
+            </p>
+        }
 
         <form class="filters" method="get" action="/logs">
+            if !trace.is_empty() { <input type="hidden" name="trace" value=(trace.clone()) /> }
+            if !span.is_empty() { <input type="hidden" name="span" value=(span.clone()) /> }
             <label>"Body contains"
                 <input type="search" name="q" placeholder="body contains…" value=(q.clone()) />
             </label>
@@ -1038,7 +1069,7 @@ async fn logs(cx: &Cx) -> Result<impl View> {
 
 #[cfg(test)]
 pub(crate) mod db_tests {
-    use super::{facets, fetch};
+    use super::{RowView, facets, fetch};
     use crate::{config::Config, db::Db, filters::Bar};
     use std::fs;
 
@@ -1095,6 +1126,47 @@ pub(crate) mod db_tests {
         out.sort();
         let _ = fs::remove_dir_all(&db.data_dir);
         out
+    }
+
+    #[test]
+    fn trace_and_span_params_narrow_the_list() {
+        assert_eq!(bodies("tr", "trace=t1"), vec!["claude_code.tool_result".to_string()]);
+        assert!(bodies("tr-span", "trace=t1&span=s2").is_empty(), "span must match too");
+        assert_eq!(bodies("tr-none", "trace=t9"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_row_links_its_trace_only_while_the_trace_is_stored() {
+        let db = temp_db("trace-stored");
+        seed_logs(&db);
+        let all = |db: &Db| {
+            let mut v: Vec<(String, bool)> = fetch(db, &Bar::default())
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.trace_id, r.trace_stored))
+                .collect();
+            v.sort();
+            v
+        };
+        // no traces table at all: nothing links (a failed lookup hides links)
+        assert!(all(&db).iter().all(|(_, s)| !s));
+        db.with_conn(|c| {
+            c.execute_batch(
+                "CREATE TABLE otel.main.otlp_traces(start_time_unix_nano TIMESTAMP, trace_id VARCHAR)
+                   WITH (time_col = 'start_time_unix_nano', ttl = '3 days', max_bytes = '64MB');
+                 INSERT INTO otel.main.otlp_traces VALUES (now()::TIMESTAMP, 't1');",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            all(&db),
+            vec![("".into(), false), ("t1".into(), true), ("t2".into(), false)],
+            "t1 is stored, t2 never arrived, '' has no trace"
+        );
+        let r = fetch(&db, &Bar::default()).unwrap().into_iter().find(|r| r.trace_id == "t2").unwrap();
+        assert_eq!(RowView::new(&r, &Bar::default()).trace_id, "", "no link for an unstored trace");
+        let _ = fs::remove_dir_all(&db.data_dir);
     }
 
     #[test]

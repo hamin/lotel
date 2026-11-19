@@ -559,6 +559,8 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
         let (spans, total_ns) = fetch_waterfall(db, &f.trace).unwrap_or_default();
         let selected = spans.iter().find(|s| s.span_id == f.span).cloned();
         let back = f.bar.href_without("/traces", &["trace", "span"]);
+        let span = selected.as_ref().map(|s| s.span_id.clone()).unwrap_or_default();
+        let (trace_logs, span_logs) = crate::correlate::log_counts(db, &f.trace, &span);
         return Ok(view! {
             trace_view(
                 trace: f.trace.clone(),
@@ -566,6 +568,8 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
                 total_ns: total_ns,
                 selected: selected,
                 back: back,
+                trace_logs: trace_logs,
+                span_logs: span_logs,
             )
         }
         .boxed());
@@ -783,6 +787,10 @@ async fn trace_view(
     total_ns: i64,
     selected: Option<WaterfallSpan>,
     back: String,
+    // logs carrying this trace's id (and the selected span's): a link to
+    // them shows only when there are some (correlate::log_counts)
+    trace_logs: u64,
+    span_logs: u64,
 ) -> Result<impl View> {
     // Stored text is masked on the way to the HTML (§5) — the bars, the labels
     // and the attribute bag all show the redacted copy; the waterfall geometry
@@ -798,6 +806,9 @@ async fn trace_view(
             <span class="mono seg">(trace.clone())</span>
             <span class="seg">((spans.len()).to_string())" spans"</span>
             <span class="seg">(fmt_ms(total_ns))" total"</span>
+            if trace_logs > 0 {
+                <span class="seg"><a href=(crate::correlate::logs_href(&trace, ""))>(crate::correlate::logs_label(trace_logs))</a></span>
+            }
             if errors > 0 {
                 <span class="badge error">(format!("{errors} errored"))</span>
             } else {
@@ -852,6 +863,9 @@ async fn trace_view(
                         <tr><td>"name"</td><td>(s.name.clone())</td></tr>
                         <tr><td>"kind"</td><td>(s.kind.clone())</td></tr>
                         <tr><td>"duration"</td><td>(s.ms.clone())</td></tr>
+                        if span_logs > 0 {
+                            <tr><td>"logs"</td><td><a href=(crate::correlate::logs_href(&trace, &s.span_id))>(crate::correlate::logs_label(span_logs))</a></td></tr>
+                        }
                         if !s.status_msg.is_empty() {
                             <tr><td>"status"</td><td><span class="badge error">"ERROR"</span>" "(s.status_msg.clone())</td></tr>
                         }
