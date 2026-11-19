@@ -526,6 +526,21 @@ assert rows_html.count("<tr") == 30, f"trace-scoped /logs lists the trace's 30 l
 assert "show all logs" in ltb and f'name="trace" value="{TR}"' in ltb, "scope is shown, clearable, and kept by the form"
 assert rows_html.count(f"/traces?trace={TR}") == 30, "each row links back to its stored trace"
 print("PASS  log <-> trace links: trace + span log counts, scoped /logs, links back")
+# M-Agents T4: /sessions?session= is the timeline — the session's spans as a
+# waterfall, the span card on ?span=, and the event band with glance chips.
+_, tlb = get(f"/sessions?range=all&session={CC_SID}")
+tl = unesc(tlb)
+assert 'class="wf"' in tl and f"/sessions?session={CC_SID}&span=" in tl, "the session's spans render as a waterfall"
+assert 'class="events"' in tl and "<b>tool_name</b>" in tl and "<b>cost_usd</b>" in tl, "event band with glance chips"
+assert "\u00d7" in tl or "×" in tl, "startup bursts fold into one row with a count"
+for k in ("<b>prompt</b>", "<b>tool_input</b>", "<b>tool_output</b>", "<b>response</b>"):
+    assert k not in tl, f"content key {k} must never be a chip"
+_, scb = get(f"/sessions?range=all&session={CC_SID}&span={SP}")
+assert "27 logs" in scb and f"/traces?trace={TR}&amp;span={SP}" in scb, "span card: its logs and its trace"
+for sid in (CX_SID, "3e122abc"):
+    _, ob = get(f"/sessions?range=all&session={sid}")
+    assert 'class="wf"' in ob, f"{sid}: other agents' sessions get a waterfall too"
+print("PASS  session timeline: waterfall, span card, event band, codex + opencode")
 check("sessions empty", "/sessions?range=all&f=session.id%3Dnone", "No agent sessions")
 
 _, hb = get("/")

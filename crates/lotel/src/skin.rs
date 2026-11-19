@@ -353,6 +353,7 @@ details.fline[open] { padding-bottom: var(--space-xs); }
 .lat-cap, .sm-legend, .err-foot, .sm-updated { font-size: var(--text-sm); color: var(--color-muted); margin-top: var(--space-xs); }
 
 .meta .badge { margin-left: var(--space-xs); }
+.meta .seg { white-space: nowrap; display: inline-block; }
 .meta .seg:not(:first-child) { border-left: 1px solid var(--color-rule); margin-left: var(--space-xs); padding-left: var(--space-xs); }
 .card.errcard { display: flex; flex-direction: column; gap: var(--space-sm); }
 .err-top { display: flex; align-items: center; gap: var(--space-lg); flex-wrap: wrap; }

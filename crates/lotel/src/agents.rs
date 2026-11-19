@@ -572,7 +572,8 @@ pub fn session_events_query(bar: &Bar, sid: &str) -> (String, Vec<String>) {
     sql.push("SELECT ")
         .expr(&event_name_expr(Some("lg")), &event_name_params())
         .push(
-            " AS ev, lg.time_unix_nano AS t, COALESCE(lg.log_attributes, '{}') AS attrs \
+            " AS ev, lg.time_unix_nano AS t, COALESCE(lg.log_attributes, '{}') AS attrs, \
+              COALESCE(lg.body, '') AS body \
               FROM otel.main.otlp_logs lg",
         );
     let mut w = Where::new();
@@ -585,8 +586,13 @@ pub fn session_events_query(bar: &Bar, sid: &str) -> (String, Vec<String>) {
     )
     .bar(bar, &LOG_COLS, Some("lg"));
     sql.where_all(&w).push(" ORDER BY lg.time_unix_nano");
+    sql.push(&format!(" LIMIT {EVENTS_SHOWN}"));
     sql.finish()
 }
+
+/// The event band's row cap: a long session still renders, and the band says
+/// when it is showing the first N.
+pub(crate) const EVENTS_SHOWN: usize = 1000;
 
 /// `/spend` (§3.3): day × model × developer from the metric points — cost,
 /// input/output/cache tokens, active seconds.
@@ -939,12 +945,218 @@ pub(crate) async fn sessions_empty_row(cx: &Cx, colspan: usize) -> Result<impl V
     })
 }
 
+// ————————————————————————————————— session timeline (§3.2) —————————————————————————————————
+
+/// Event-band chips worth a glance, in this order: what ran, what it cost,
+/// how it went. Everything else is in the row's expandable bag.
+const EVENT_CHIP_KEYS: &[&str] = &[
+    "tool_name", "gen_ai.tool.name", "decision", "success", "error", "status_code",
+    "model", "duration_ms", "cost_usd", "input_tokens", "output_tokens",
+    "cache_read_tokens", "cache_creation_tokens", "prompt_length", "source",
+];
+
+/// One event-band row, every displayed cell already through
+/// `Config::display` (§5).
+#[derive(Clone, Debug)]
+pub(crate) struct EventCells {
+    pub(crate) time: String,
+    pub(crate) name: String,
+    pub(crate) chips: Vec<(String, String)>,
+    /// the whole attribute bag, pretty and masked, for the <details>
+    pub(crate) bag: String,
+    /// how many consecutive same-name, chipless events this row stands for
+    /// (startup bursts: a dozen `hook_registered` in a row read as one line)
+    pub(crate) repeat: usize,
+}
+
+/// Fold runs of consecutive events that share a name and have no chips into
+/// their first row with a count; anything with chips (a tool call, an API
+/// request) always keeps its own row.
+pub(crate) fn fold_repeats(events: Vec<EventCells>) -> Vec<EventCells> {
+    let mut out: Vec<EventCells> = Vec::with_capacity(events.len());
+    for e in events {
+        match out.last_mut() {
+            Some(prev) if prev.name == e.name && prev.chips.is_empty() && e.chips.is_empty() => {
+                prev.repeat += 1;
+            }
+            _ => out.push(e),
+        }
+    }
+    out
+}
+
+/// Shape one [`session_events_query`] row (`ev, t, attrs, body`) for the band.
+/// Chips come only from [`EVENT_CHIP_KEYS`] and never from a
+/// [`CONTENT_KEYS`] key, whatever the opt-in says — a chip is a glance, not a
+/// content viewer. A row with no event name (opencode) is named by its body's
+/// message (element 0 of the `[message, payload]` array), masked like any
+/// other stored text.
+pub(crate) fn event_cells(row: &[String], cfg: &Config) -> EventCells {
+    let get = |i: usize| row.get(i).cloned().unwrap_or_default();
+    let attrs: Map<String, Value> = match serde_json::from_str::<Value>(&get(2)) {
+        Ok(Value::Object(m)) => m,
+        _ => Map::new(),
+    };
+    let chips = EVENT_CHIP_KEYS
+        .iter()
+        .filter(|k| !CONTENT_KEYS.contains(k))
+        .filter_map(|k| {
+            let v = attrs.get(*k)?;
+            let text = match v {
+                Value::String(s) => s.clone(),
+                Value::Null => return None,
+                other => other.to_string(),
+            };
+            let shown = cfg.display(&text);
+            // money reads as money: cents, not float noise
+            let shown = if *k == "cost_usd" { usd_cell(&shown) } else { shown };
+            (!text.is_empty()).then(|| (k.to_string(), shown))
+        })
+        .collect();
+    let name = match get(0) {
+        n if !n.is_empty() => n,
+        _ => {
+            let body = get(3);
+            let msg = match serde_json::from_str::<Value>(&body) {
+                Ok(Value::Array(a)) => a.first().and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                _ => body.chars().take(80).collect(),
+            };
+            if msg.is_empty() { "event".to_string() } else { msg }
+        }
+    };
+    let bag = if attrs.is_empty() {
+        String::new()
+    } else {
+        cfg.display(&serde_json::to_string_pretty(&Value::Object(attrs)).unwrap_or_default())
+    };
+    EventCells {
+        time: cfg.display(&get(1)),
+        name: cfg.display(&name),
+        chips,
+        bag,
+        repeat: 1,
+    }
+}
+
+/// The session's events, oldest first, shaped for the band.
+pub(crate) fn fetch_session_events(db: &Db, bar: &Bar, sid: &str, cfg: &Config) -> Vec<EventCells> {
+    let (sql, params) = session_events_query(bar, sid);
+    let bind: Vec<&dyn duckdb::ToSql> = params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
+    db.query_rows_with(&sql, &bind)
+        .map(|(_, rows)| fold_repeats(rows.iter().map(|r| event_cells(r, cfg)).collect()))
+        .unwrap_or_default()
+}
+
+/// The event band: one line per log event — time, the event name, its glance
+/// chips — expandable to the masked attribute bag.
+#[component]
+pub(crate) async fn event_band(cx: &Cx, events: Vec<EventCells>) -> Result<impl View> {
+    Ok(view! {
+        <table class="events">
+            <thead><tr><th>"time"</th><th>"event"</th></tr></thead>
+            <tbody>
+                for e in events {
+                    <tr>
+                        <td class="muted mono">(e.time.clone())</td>
+                        <td class="logbody">
+                            if e.bag.is_empty() {
+                                <span class="badge">(e.name.clone())</span>
+                                if e.repeat > 1 { <span class="muted">(format!(" ×{}", e.repeat))</span> }
+                            } else {
+                                <details class="logx">
+                                    <summary class="logtext">
+                                        <span class="badge">(e.name.clone())</span>
+                                        if e.repeat > 1 { <span class="muted">(format!(" ×{}", e.repeat))</span> }
+                                    </summary>
+                                    <pre>(e.bag.clone())</pre>
+                                </details>
+                            }
+                            if !e.chips.is_empty() {
+                                <span class="logchips">
+                                    for (k, v) in &e.chips {
+                                        <span class="kchip"><b>(k.clone())</b>"="(v.clone())</span>
+                                    }
+                                </span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    })
+}
+
+/// `/sessions?session=<id>` (§3.2): the session's header, its spans as one
+/// waterfall (a tree per trace, one shared time window), the selected span's
+/// card, then the event band.
+#[component]
+pub(crate) async fn session_timeline(
+    cx: &Cx,
+    sid: String,
+    head: Option<SessionCells>,
+    spans: Vec<crate::traces::WaterfallSpan>,
+    total_ns: i64,
+    selected: Option<crate::traces::WaterfallSpan>,
+    span_logs: u64,
+    events: Vec<EventCells>,
+    back: String,
+) -> Result<impl View> {
+    let cfg = context::<Config>(cx);
+    let spans: Vec<_> = spans.iter().map(|s| crate::traces::span_for_display(s, cfg)).collect();
+    let selected = selected.as_ref().map(|s| crate::traces::span_for_display(s, cfg));
+    let shown_sid = cfg.display(&sid);
+    let span_href = format!("/sessions?session={}&span=", Bar::enc(&shown_sid));
+    let capped = events.iter().map(|e| e.repeat).sum::<usize>() >= EVENTS_SHOWN;
+    Ok(view! {
+        <h1>"Session"</h1>
+        <p class="sub meta">
+            <span class="mono seg">(shown_sid.clone())</span>
+            if let Some(h) = &head {
+                <span class="seg">(h.service.clone())</span>
+                <span class="seg">(h.events.clone())" events"</span>
+                <span class="seg">(h.spans.clone())" spans"</span>
+                if !h.usd.is_empty() { <span class="seg">(h.usd.clone())</span> }
+                if !h.tokens.is_empty() { <span class="seg">(h.tokens.clone())" tokens in / out"</span> }
+                <span class="seg">"last seen "(h.last.clone())</span>
+                <span class="seg"><a href=(h.logs.clone())>"logs"</a></span>
+                if !h.traces.is_empty() { <span class="seg"><a href=(h.traces.clone())>"traces"</a></span> }
+            }
+        </p>
+        <p><a class="trace-link" href=(back)>"← all sessions"</a></p>
+
+        if head.is_none() && spans.is_empty() && events.is_empty() {
+            <p class="muted">"No data for this session in this view (it may have aged out, or the filters exclude it)."</p>
+        }
+
+        if !spans.is_empty() {
+            <h2>"Spans"</h2>
+            crate::traces::waterfall(spans: spans, total_ns: total_ns, href: span_href)
+            if let Some(s) = selected {
+                <p class="meta">
+                    <a href=(format!("/traces?trace={}&span={}", Bar::enc(&s.trace_id), Bar::enc(&s.span_id)))>"open in its trace"</a>
+                </p>
+                crate::traces::span_card(s: s.clone(), logs: if span_logs > 0 {
+                    Some((crate::correlate::logs_href(&s.trace_id, &s.span_id), crate::correlate::logs_label(span_logs)))
+                } else { None })
+            }
+        }
+
+        if !events.is_empty() {
+            <h2>"Events"</h2>
+            if capped {
+                <p class="muted">(format!("Showing the first {EVENTS_SHOWN} events of this session."))</p>
+            }
+            event_band(events: events)
+        }
+    })
+}
+
 /// `/sessions` (§3.1, §4): one row per agent session — Claude Code's
 /// `session.id`, Codex's `conversation.id`/`thread_id`, opencode's
 /// `opencode.run` — under the shared [`Bar`], with the retention line every
 /// agent page carries and the `content: shown` marker whenever the opt-in
-/// has it (§5). `?session=<sid>` narrows the list to that session; its
-/// timeline is T4.
+/// has it (§5). `?session=<sid>[&span=<id>]` opens that session's
+/// timeline instead ([`session_timeline`], §3.2).
 #[page("/sessions")]
 pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
     let db = context::<Db>(cx);
@@ -956,6 +1168,29 @@ pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
     let mut rows = fetch_sessions(db, &bar, &service).unwrap_or_default();
     if !open.is_empty() {
         rows.retain(|r| r.sid == open);
+        let head = rows.first().map(|r| session_cells(r, &bar, cfg));
+        let (spans, total_ns) = crate::traces::fetch_session_waterfall(db, &open).unwrap_or_default();
+        let span = bar.get("span");
+        let selected = spans.iter().find(|s| s.span_id == span).cloned();
+        let span_logs = selected
+            .as_ref()
+            .map(|s| crate::correlate::log_counts(db, &s.trace_id, &s.span_id).1)
+            .unwrap_or(0);
+        let events = fetch_session_events(db, &bar, &open, cfg);
+        let back = bar.href_without("/sessions", &["session", "span"]);
+        return Ok(view! {
+            session_timeline(
+                sid: open.clone(),
+                head: head,
+                spans: spans,
+                total_ns: total_ns,
+                selected: selected,
+                span_logs: span_logs,
+                events: events,
+                back: back,
+            )
+        }
+        .boxed());
     }
     // The logs/traces contract: empty under a window narrower than all
     // offers the same query at range=all; the setup pointer shows whenever
@@ -995,13 +1230,6 @@ pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
             attr_field(raw: raw_f, errors: attr_errors)
             <button type="submit">"Apply"</button>
         </form>
-
-        if !open.is_empty() {
-            <p class="muted">
-                "Session timeline is on the way — the row below is " (open.clone())
-                "; its events are already on the logs page."
-            </p>
-        }
 
         <table>
             <thead>
@@ -1500,7 +1728,7 @@ mod tests {
         assert!(params.iter().any(|p| p == "ses_1"), "{params:?}");
         assert!(params.iter().any(|p| p == "sonnet"));
         assert!(sql.contains("NULLIF(lg.event_name, '')"));
-        assert!(sql.ends_with("ORDER BY lg.time_unix_nano"));
+        assert!(sql.ends_with(&format!("ORDER BY lg.time_unix_nano LIMIT {EVENTS_SHOWN}")), "oldest first, capped");
         // the event-name path is the first `?`, since the projection leads
         assert_eq!(params[0], EVENT_NAME_PATH);
     }
@@ -1559,7 +1787,7 @@ mod tests {
 
     use topcoat::{context::Cx, view::{ViewExt, view}};
 
-    fn cfg(show: bool) -> Config {
+    pub(super) fn cfg(show: bool) -> Config {
         Config {
             host: "127.0.0.1".into(),
             port: 0,
@@ -1620,6 +1848,68 @@ mod tests {
         assert_eq!((b.usd.as_str(), b.tokens.as_str()), ("", ""));
         let spanless = SessionRow { spans: "0".into(), ..row() };
         assert_eq!(session_cells(&spanless, &Bar::default(), &cfg(false)).traces, "", "no spans, no traces link");
+    }
+
+    #[test]
+    fn event_band_chips_exclude_content_keys() {
+        // a content key that is also a glance key would still be dropped:
+        // every chip key is checked against CONTENT_KEYS
+        for k in EVENT_CHIP_KEYS {
+            assert!(!CONTENT_KEYS.contains(k), "{k} is content and must never be a chip");
+        }
+        let attrs = r#"{"event.name":"tool_result","tool_name":"Bash","success":true,
+            "duration_ms":1500,"tool_input":"rm -rf secret","prompt":"a synthetic prompt",
+            "user.email":"jane.doe@corp.example"}"#;
+        let row = |show| event_cells(
+            &["tool_result".into(), "2026-11-17 10:00:00".into(), attrs.into(), String::new()],
+            &cfg(show),
+        );
+        for show in [false, true] {
+            let e = row(show);
+            let keys: Vec<&str> = e.chips.iter().map(|(k, _)| k.as_str()).collect();
+            assert_eq!(keys, vec!["tool_name", "success", "duration_ms"], "glance keys only, in order");
+            let cost = event_cells(&["api_request".into(), "t".into(), r#"{"cost_usd":0.017056400000000003}"#.into(), String::new()], &cfg(show));
+            assert_eq!(cost.chips, vec![("cost_usd".to_string(), "$0.02".to_string())]);
+            assert!(e.chips.iter().all(|(_, v)| !v.contains("secret") && !v.contains("synthetic")));
+        }
+        // the expandable bag is masked unless the operator opted in
+        let hidden = row(false).bag;
+        assert!(!hidden.contains("rm -rf secret") && !hidden.contains("a synthetic prompt"), "{hidden}");
+        assert!(!hidden.contains("jane.doe@corp.example"), "emails masked in the bag");
+        assert!(hidden.contains("tool_input"), "the key stays, the content goes");
+        assert!(row(true).bag.contains("rm -rf secret"), "opt-in shows the bag");
+    }
+
+    #[test]
+    fn repeated_chipless_events_fold_into_one_row() {
+        let ev = |name: &str, chips: bool| EventCells {
+            time: "t".into(),
+            name: name.into(),
+            chips: if chips { vec![("tool_name".into(), "Bash".into())] } else { vec![] },
+            bag: String::new(),
+            repeat: 1,
+        };
+        let folded = fold_repeats(vec![
+            ev("hook_registered", false), ev("hook_registered", false), ev("hook_registered", false),
+            ev("plugin_loaded", false),
+            ev("tool_result", true), ev("tool_result", true),
+            ev("hook_registered", false),
+        ]);
+        let got: Vec<(&str, usize)> = folded.iter().map(|e| (e.name.as_str(), e.repeat)).collect();
+        assert_eq!(got, vec![
+            ("hook_registered", 3), ("plugin_loaded", 1),
+            ("tool_result", 1), ("tool_result", 1), ("hook_registered", 1),
+        ], "chipped events keep their rows; only adjacent runs fold");
+    }
+
+    #[test]
+    fn unnamed_events_take_their_body_message_never_the_payload() {
+        let body = r#"["cli starting","{\"prompt\":\"a synthetic prompt\"}"]"#;
+        let e = event_cells(&[String::new(), "t".into(), "{}".into(), body.into()], &cfg(false));
+        assert_eq!(e.name, "cli starting");
+        assert!(e.bag.is_empty() && e.chips.is_empty());
+        let plain = event_cells(&[String::new(), "t".into(), String::new(), String::new()], &cfg(false));
+        assert_eq!(plain.name, "event", "nothing to name it by");
     }
 
     #[test]
@@ -1921,6 +2211,22 @@ pub(crate) mod db_tests {
         assert!(none.is_empty());
 
         let _ = fs::remove_dir_all(&db.data_dir);
+    }
+
+    #[test]
+    fn session_timeline_fetches_spans_and_events_for_every_agent_key() {
+        let db = temp_db("ag-timeline");
+        seed_logs(&db);
+        seed_traces(&db);
+        let ev = super::fetch_session_events(&db, &Bar::default(), "ses_cc", &super::tests::cfg(false));
+        assert!(!ev.is_empty() && ev.iter().any(|e| e.name == "api_request"), "{ev:?}");
+        assert!(ev.iter().all(|e| !e.bag.contains("a synthetic prompt")), "band is masked");
+        let (cc, _) = crate::traces::fetch_session_waterfall(&db, "ses_cc").unwrap();
+        assert!(!cc.is_empty() && cc.iter().all(|s| !s.trace_id.is_empty()), "spans carry their trace id");
+        let (cx, _) = crate::traces::fetch_session_waterfall(&db, "conv_9").unwrap();
+        assert!(!cx.is_empty(), "codex spans join by thread_id");
+        assert!(crate::traces::fetch_session_waterfall(&db, "11").unwrap().0.is_empty(), "OS thread ids are not sessions");
+        let _ = std::fs::remove_dir_all(&db.data_dir);
     }
 
     #[test]

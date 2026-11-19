@@ -104,6 +104,7 @@ impl TraceFilters {
 /// One span of a trace, positioned for the waterfall.
 #[derive(Clone)]
 pub struct WaterfallSpan {
+    pub trace_id: String,
     pub span_id: String,
     pub parent: String,
     pub service: String,
@@ -123,8 +124,9 @@ pub struct WaterfallSpan {
 /// ([`crate::agents::redact_cell`], plan §5) unless the operator opted in.
 /// Ids, timings and positions are left alone — they build the waterfall, and
 /// they hold nothing an agent typed.
-fn span_for_display(s: &WaterfallSpan, cfg: &Config) -> WaterfallSpan {
+pub(crate) fn span_for_display(s: &WaterfallSpan, cfg: &Config) -> WaterfallSpan {
     WaterfallSpan {
+        trace_id: s.trace_id.clone(),
         span_id: s.span_id.clone(),
         parent: s.parent.clone(),
         service: s.service.clone(),
@@ -320,6 +322,7 @@ mod tests {
     /// and home directory.
     fn span() -> WaterfallSpan {
         WaterfallSpan {
+            trace_id: "t1".into(),
             span_id: "s1".into(),
             parent: String::new(),
             service: "claude-code".into(),
@@ -408,9 +411,6 @@ pub(crate) fn fetch_waterfall(db: &Db, trace: &str) -> anyhow::Result<(Vec<Water
 /// `depth` — is per trace (a parent outside the fetched set is a root, which is
 /// what keeps each trace its own tree), while the bars share the one window
 /// the whole session covers.
-// The session page (T4) is the caller; until it lands nothing in the binary
-// reaches this, and `just lint` denies warnings.
-#[allow(dead_code)]
 pub(crate) fn fetch_session_waterfall(db: &Db, sid: &str) -> anyhow::Result<(Vec<WaterfallSpan>, i64)> {
     let conds = crate::agents::session_attr_cols(&crate::agents::TRACE_COLS, None);
     let params = crate::agents::session_attr_params(&crate::agents::TRACE_COLS, sid);
@@ -430,7 +430,8 @@ pub(crate) fn fetch_session_waterfall(db: &Db, sid: &str) -> anyhow::Result<(Vec
 const WATERFALL_SELECT: &str = "SELECT epoch_ns(start_time_unix_nano), duration_time_unix_nano, \
      span_id, COALESCE(parent_span_id, ''), service_name, name, \
      COALESCE(kind, 0), COALESCE(status_code, 0), \
-     COALESCE(status_status_message, ''), COALESCE(span_attributes, '{}') \
+     COALESCE(status_status_message, ''), COALESCE(span_attributes, '{}'), \
+     COALESCE(trace_id, '') \
      FROM otel.main.otlp_traces WHERE ";
 
 /// Position rows (as `WATERFALL_SELECT` returns them) in the waterfall:
@@ -487,6 +488,7 @@ fn waterfall_from_rows(rows: Vec<Vec<String>>) -> (Vec<WaterfallSpan>, i64) {
             let r = &rows[i];
             let offset = node.start_ns - min_start;
             ordered.push(WaterfallSpan {
+                trace_id: r[10].clone(),
                 span_id: r[2].clone(),
                 parent: r[3].clone(),
                 service: r[4].clone(),
@@ -798,6 +800,7 @@ async fn trace_view(
     let cfg = context::<Config>(cx);
     let spans: Vec<WaterfallSpan> = spans.iter().map(|s| span_for_display(s, cfg)).collect();
     let selected = selected.as_ref().map(|s| span_for_display(s, cfg));
+    let sel_span = selected.as_ref().map(|s| s.span_id.clone()).unwrap_or_default();
     let errors = spans.iter().filter(|s| s.is_error).count();
 
     Ok(view! {
@@ -820,61 +823,89 @@ async fn trace_view(
         if spans.is_empty() {
             <p class="muted">"No spans for this trace (or it has aged out)."</p>
         } else {
-            <div class="wf">
-                <div class="wfruler">
-                    <div class="wflabel">"span"</div>
-                    <div class="wftrack">
-                        <span class="tick" style="left:0%">"0"</span>
-                        <span class="tick" style="left:50%">(fmt_ms(total_ns / 2))</span>
-                        <span class="tick" style="left:calc(100% - 4rem)">"end"</span>
-                    </div>
-                </div>
-                for s in spans {
-                    <a class="wfrow" href=(format!("/traces?trace={}&span={}", trace.clone(), s.span_id.clone()))>
-                        <div class="wflabel" style=(format!("padding-left:{}px", s.depth * 14))>
-                            <span class=(format!("svc-dot {}", service_class(&s.service)))>"●"</span>
-                            <b>(s.service.clone())</b>
-                            " "
-                            (s.name.clone())
-                            if !s.kind.is_empty() {
-                                <span class="muted">(format!(" · {}", s.kind))</span>
-                            }
-                        </div>
-                        <div class="wftrack">
-                            <span
-                                class=(format!("wfbar {} {}", service_class(&s.service), if s.is_error { "wferr" } else { "" }))
-                                style=(format!("left:{}%;width:{}%", s.offset_pct, s.width_pct))
-                                title=(format!("{} · {} · {}", s.span_id.clone(), s.kind.clone(), s.ms.clone()))
-                            >
-                                (s.ms.clone())
-                            </span>
-                        </div>
-                    </a>
-                }
-            </div>
-
+            waterfall(spans: spans, total_ns: total_ns, href: format!("/traces?trace={}&span=", trace))
             if let Some(s) = selected {
-                <h2>"Span"</h2>
-                <div class="card">
-                    <table class="kv">
-                        <tr><td>"span_id"</td><td><code>(s.span_id.clone())</code></td></tr>
-                        <tr><td>"parent"</td><td><code>(if s.parent.is_empty() { "— (root)".to_string() } else { s.parent.clone() })</code></td></tr>
-                        <tr><td>"service"</td><td>(s.service.clone())</td></tr>
-                        <tr><td>"name"</td><td>(s.name.clone())</td></tr>
-                        <tr><td>"kind"</td><td>(s.kind.clone())</td></tr>
-                        <tr><td>"duration"</td><td>(s.ms.clone())</td></tr>
-                        if span_logs > 0 {
-                            <tr><td>"logs"</td><td><a href=(crate::correlate::logs_href(&trace, &s.span_id))>(crate::correlate::logs_label(span_logs))</a></td></tr>
-                        }
-                        if !s.status_msg.is_empty() {
-                            <tr><td>"status"</td><td><span class="badge error">"ERROR"</span>" "(s.status_msg.clone())</td></tr>
-                        }
-                    </table>
-                    <h2>"Attributes"</h2>
-                    <pre>(s.attrs.clone())</pre>
-                </div>
+                span_card(s: s, logs: if span_logs > 0 {
+                    Some((crate::correlate::logs_href(&trace, &sel_span), crate::correlate::logs_label(span_logs)))
+                } else { None })
             }
         }
+    })
+}
+
+/// The waterfall card: a ruler, then one row per span (already masked for
+/// display) indented by depth. Each row links `href` + its span id — the
+/// trace page and the session timeline both open the span card that way.
+#[component]
+pub(crate) async fn waterfall(cx: &Cx, spans: Vec<WaterfallSpan>, total_ns: i64, href: String) -> Result<impl View> {
+    Ok(view! {
+        <div class="wf">
+            <div class="wfruler">
+                <div class="wflabel">"span"</div>
+                <div class="wftrack">
+                    <span class="tick" style="left:0%">"0"</span>
+                    <span class="tick" style="left:50%">(fmt_ms(total_ns / 2))</span>
+                    <span class="tick" style="left:calc(100% - 4rem)">"end"</span>
+                </div>
+            </div>
+            for s in spans {
+                <a class="wfrow" href=(format!("{}{}", href, s.span_id))>
+                    <div class="wflabel" style=(format!("padding-left:{}px", s.depth * 14))>
+                        <span class=(format!("svc-dot {}", service_class(&s.service)))>"●"</span>
+                        <b>(s.service.clone())</b>
+                        " "
+                        (s.name.clone())
+                        if !s.kind.is_empty() {
+                            <span class="muted">(format!(" · {}", s.kind))</span>
+                        }
+                    </div>
+                    <div class="wftrack">
+                        <span
+                            class=(format!("wfbar {} {}", service_class(&s.service), if s.is_error { "wferr" } else { "" }))
+                            style=(format!("left:{}%;width:{}%", s.offset_pct, s.width_pct))
+                            title=(format!("{} · {} · {}", s.span_id.clone(), s.kind.clone(), s.ms.clone()))
+                        >
+                            (s.ms.clone())
+                        </span>
+                    </div>
+                </a>
+            }
+        </div>
+    })
+}
+
+/// A JSON bag pretty-printed for a <pre>; anything else as it came.
+fn pretty_json(s: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(s)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or_else(|| s.to_string())
+}
+
+/// The selected span's detail card (already masked for display), with a
+/// link to its logs when some carry its id.
+#[component]
+pub(crate) async fn span_card(cx: &Cx, s: WaterfallSpan, logs: Option<(String, String)>) -> Result<impl View> {
+    Ok(view! {
+        <h2>"Span"</h2>
+        <div class="card">
+            <table class="kv">
+                <tr><td>"span_id"</td><td><code>(s.span_id.clone())</code></td></tr>
+                <tr><td>"parent"</td><td><code>(if s.parent.is_empty() { "— (root)".to_string() } else { s.parent.clone() })</code></td></tr>
+                <tr><td>"service"</td><td>(s.service.clone())</td></tr>
+                <tr><td>"name"</td><td>(s.name.clone())</td></tr>
+                <tr><td>"kind"</td><td>(s.kind.clone())</td></tr>
+                <tr><td>"duration"</td><td>(s.ms.clone())</td></tr>
+                if let Some((href, label)) = &logs {
+                    <tr><td>"logs"</td><td><a href=(href.clone())>(label.clone())</a></td></tr>
+                }
+                if !s.status_msg.is_empty() {
+                    <tr><td>"status"</td><td><span class="badge error">"ERROR"</span>" "(s.status_msg.clone())</td></tr>
+                }
+            </table>
+            <h2>"Attributes"</h2>
+            <pre>(pretty_json(&s.attrs))</pre>
+        </div>
     })
 }
 
