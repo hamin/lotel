@@ -289,6 +289,24 @@ pub(crate) fn cell(row: &[String], i: usize) -> String {
     row.get(i).cloned().unwrap_or_default()
 }
 
+/// The sticker the agent pages show while content display is opted in (§5):
+/// `content: shown` by the page title, so a lotel that displays prompt text
+/// can never be read as the private default. While the redactor is on — the
+/// default — it renders nothing: there is nothing to admit.
+///
+/// The agent pages (T3–T7) interpolate it next to their titles; until they
+/// land it has no caller, hence the allow.
+#[allow(dead_code)]
+pub(crate) fn content_marker(cx: &Cx, shown: bool) -> impl View {
+    view! {
+        if shown {
+            <span class="badge warn" title="LOTEL_AGENT_SHOW_CONTENT is set: prompt and tool content are displayed">
+                "content: shown"
+            </span>
+        }
+    }
+}
+
 /// Sidebar nav: (label, path).
 pub(crate) fn nav_links() -> [(&'static str, &'static str); 7] {
     [
@@ -323,9 +341,23 @@ pub(crate) fn sev_class(sev: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SKIN, Skin, panel_href, parse_skin, query_has_skin, sev_class, short_ttl,
-        skin_readout, thousands,
+        DEFAULT_SKIN, Skin, content_marker, panel_href, parse_skin, query_has_skin, sev_class,
+        short_ttl, skin_readout, thousands,
     };
+    use topcoat::{context::Cx, view::ViewExt};
+
+    /// The opt-in marker (§5): it says `content: shown` when content is being
+    /// displayed and stays out of the page otherwise.
+    #[tokio::test]
+    async fn content_marker_only_appears_when_content_is_shown() {
+        let cx = Cx::new();
+        let on = content_marker(&cx, true).single().await.unwrap().render(&cx);
+        assert!(on.contains("content: shown"), "{on}");
+        assert!(on.contains("badge warn"), "a house badge, no new CSS: {on}");
+
+        let off = content_marker(&cx, false).single().await.unwrap().render(&cx);
+        assert!(!off.contains("content"), "masked is silent: {off}");
+    }
 
     #[test]
     fn short_ttl_shortens_the_recognised_units() {

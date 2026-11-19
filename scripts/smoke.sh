@@ -12,7 +12,8 @@ BIN="${LOTEL_BIN:-target/debug/lotel}"
 [ -x "$BIN" ] || { echo "no binary; run cargo build first" >&2; exit 1; }
 
 TMP="$(mktemp -d)"
-trap 'kill $SRV 2>/dev/null || true; rm -rf "$TMP"' EXIT
+SRV2=""
+trap 'kill $SRV 2>/dev/null || true; kill $SRV2 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 export LOTEL_ADDR=127.0.0.1:18080
 export LOTEL_OTLP_ADDR=127.0.0.1:14318
@@ -38,6 +39,55 @@ curl -fsS -X POST "http://127.0.0.1:14318/v1/logs" \
     -H 'Authorization: Bearer lotel-smoke-token-0123456789' \
     -H 'Content-Type: application/json' \
     --data "@testdata/logs-agents.json" >/dev/null
+# M-Agents T2 canaries (invented by this script, never copied from a real
+# capture): the shapes the agent CLIs send when their content gates are open —
+# a prompt attribute, opencode's `[message, "<command line>"]` body, a tool
+# input on a span, plus an email and a home path in free text.
+python3 - "$TMP" <<'PY'
+import json, sys
+
+t = sys.argv[1]
+PROMPT, COMMAND, MAIL, PATH = "canary-prompt-4f7d2a", "canary-command-9be1c3", "jane.doe@corp.example", "/Users/jane/keys.pem"
+
+
+def attr(key, value):
+    shape = {"boolValue": value} if isinstance(value, bool) else (
+        {"intValue": str(value)} if isinstance(value, int) else {"stringValue": value})
+    return {"key": key, "value": shape}
+
+
+def resource(name):
+    return {"attributes": [attr("service.name", name)]}
+
+
+cli = {"timeUnixNano": "1795023724725000000", "severityText": "INFO",
+       "body": {"stringValue": json.dumps(["cli starting", json.dumps({"args": ["run", PROMPT], "cwd": PATH})])},
+       "attributes": [attr("role", "cli")]}
+prompt = {"timeUnixNano": "1795023724726000000", "severityText": "INFO",
+          "body": {"stringValue": "claude_code.user_prompt"},
+          "attributes": [attr("event.name", "user_prompt"), attr("session.id", "ses_canary"),
+                         attr("prompt", PROMPT), attr("prompt_length", 18), attr("tool_name", "canary-bash")]}
+logs = {"resourceLogs": [
+    {"resource": resource("canary-agent"),
+     "scopeLogs": [{"scope": {"name": "effect"}, "logRecords": [cli, prompt]}]}]}
+span = {"traceId": "0123456789abcdef0123456789abcdef", "spanId": "0123456789abcdef",
+        "name": f"tool execute for {MAIL}", "kind": 1,
+        "startTimeUnixNano": "1795023724725000000", "endTimeUnixNano": "1795023725725000000",
+        "status": {"code": 2, "message": f"denied: {PATH}"},
+        "attributes": [attr("tool_name", "canary-bash"),
+                       attr("tool_input", json.dumps({"command": COMMAND})),
+                       attr("duration_ms", 1500)]}
+traces = {"resourceSpans": [{"resource": resource("canary-agent"),
+                             "scopeSpans": [{"scope": {"name": "claude_code"}, "spans": [span]}]}]}
+open(f"{t}/canary-logs.json", "w").write(json.dumps(logs))
+open(f"{t}/canary-traces.json", "w").write(json.dumps(traces))
+PY
+for s in logs traces; do
+    curl -fsS -X POST "http://127.0.0.1:14318/v1/$s" \
+        -H 'Authorization: Bearer lotel-smoke-token-0123456789' \
+        -H 'Content-Type: application/json' \
+        --data "@$TMP/canary-$s.json" >/dev/null
+done
 sleep 3
 
 python3 - <<'PY'
@@ -97,7 +147,16 @@ check("facet active",   "/logs?severity=ERROR", "facet-row on")
 # Agent-style bodies: JSON renders as message + key=value chips (no JS), and
 # a row expands via <details>. Non-JSON rows stay verbatim.
 wait_for("agents array body", "/logs", "cli starting")
-check("agents nested chip",  "/logs", "2.3.0")            # JSON-in-string decoded
+# M-Agents T2 (§5) retires J1's expectation here. opencode's `cli starting`
+# payload is the one real prompt leak in the capture, so its whole element is
+# masked at render: the message stays, the fields decoded out of it (2.3.0,
+# args) no longer reach the page. The `f=body.version%3D2.3.0` check below
+# still proves the payload decodes and stays filterable — filters read the
+# stored row, rendering reads the masked copy.
+_, abb = get("/logs")
+assert "2.3.0" not in abb, "the cli-starting payload must not render its fields"
+assert "[REDACTED]" in abb, "the masked element shows the placeholder instead"
+print("PASS  cli-starting payload masked (message kept, fields hidden)")
 check("agents object body",  "/logs", "session created")
 check("agents object chips", "/logs", "anthropic")
 check("claude code row",     "/logs", "claude_code.tool_result")
@@ -330,10 +389,81 @@ assert "querySelectorAll('details[data-key]')" in lpage, "live swap must track o
 assert "getSelection" in lpage, "live swap must skip while text inside the target is selected"
 print("PASS  logs live tail folded into LotelLive (open-details + selection guard)")
 
+# M-Agents T2 · privacy default (plan §5): prompt text, tool input/output and
+# the opencode command line are never displayed. The canaries this script
+# invented must be absent from the row list, the tail fragment, a filtered
+# list, the SQL console's result cells and Explore's result table — while the
+# keys, counts and event names that make a row readable do survive.
+CANARY_PROMPT, CANARY_CMD, CANARY_MAIL = "canary-prompt-4f7d2a", "canary-command-9be1c3", "jane.doe@corp.example"
+cab = wait_for("canary agent rows", "/logs?service=canary-agent", "canary-bash")
+for name, path in (("tail fragment", "/api/live?topic=logs&range=all&service=canary-agent"),
+                   ("attribute filter", "/logs?f=session.id%3Dses_canary")):
+    _, b = get(path)
+    assert CANARY_PROMPT not in b, f"{name} leaked the prompt"
+    print("PASS  no prompt in the", name)
+assert "[REDACTED]" in cab, "the masked placeholder is what the row shows"
+assert "cli starting" in cab, "the message element of the cli-starting body stays"
+assert "prompt_length" in cab and "user_prompt" in cab and "canary-bash" in cab, \
+    "keys, event names and numeric companions survive masking"
+assert "canary-command" not in cab, "the whole payload element goes, keys included"
+print("PASS  masked row keeps its shape: message, keys, counts — no contents")
+
+_, cb = get("/query?mode=sql&sql=" + urllib.parse.quote(
+    "SELECT body, log_attributes FROM otel.main.otlp_logs WHERE service_name = 'canary-agent'"))
+assert CANARY_PROMPT not in cb and "[REDACTED]" in cb, "SQL console result cells must be masked"
+print("PASS  sql console result cells masked")
+
+_, eb = get("/query" + q(dataset="logs", range="all",
+              filters='[{"col":"service_name","op":"=","val":"canary-agent"}]'))
+table = eb.split('class="qtablewrap"')[-1].split("</table>")[0]
+assert CANARY_PROMPT not in table, "Explore result cells must be masked, and their links too"
+assert "[REDACTED]" in table, "…and show the placeholder"
+print("PASS  explore result cells masked")
+assert CANARY_PROMPT not in eb, "Explore facet labels and links must be masked too"
+print("PASS  explore page (facets included) masked")
+
+_, tb = get("/traces?service=canary-agent")
+assert CANARY_MAIL not in tb and "[redacted-email@example.invalid]" in tb, "span name must not carry an address"
+trace = unesc(tb).split("/traces?trace=")[1].split('"')[0]
+_, sb = get(f"/traces?trace={trace}&span=0123456789abcdef")
+assert CANARY_CMD not in sb and "tool_input" in sb and "[REDACTED]" in sb, "span attributes masked, key kept"
+assert "denied: /Users/jane" not in sb, "the status message loses the home path"
+print("PASS  waterfall + span card mask stored text, keep ids and keys")
+
 check("storage ttl",    "/storage", "7d")
 check("storage segs",   "/storage", "Segments")
 
 sys.exit(1 if fails else 0)
 PY
+
+# M-Agents T2: LOTEL_AGENT_SHOW_CONTENT=1 is the only way to see content, and
+# it announces itself (§5) — a lotel that displays prompts must never look
+# like the private default. Its own throwaway instance, store and ports.
+export LOTEL_ADDR=127.0.0.1:18081 LOTEL_OTLP_ADDR=127.0.0.1:14319 LOTEL_DATA_DIR="$TMP/store-show"
+export LOTEL_AGENT_SHOW_CONTENT=1
+"$BIN" >"$TMP/log-show" 2>&1 &
+SRV2=$!
+for _ in $(seq 1 50); do
+    curl -fsS http://127.0.0.1:18081/api/health >/dev/null 2>&1 && break
+    sleep 0.2
+done
+curl -fsS -X POST "http://127.0.0.1:14319/v1/logs" \
+    -H 'Authorization: Bearer lotel-smoke-token-0123456789' \
+    -H 'Content-Type: application/json' \
+    --data "@$TMP/canary-logs.json" >/dev/null
+shown=""
+for _ in $(seq 1 60); do
+    curl -fsS http://127.0.0.1:18081/logs | grep -q 'canary-prompt-4f7d2a' && { shown=yes; break; }
+    sleep 0.5
+done
+grep -q 'agent content: shown' "$TMP/log-show" \
+    || { echo "FAIL opt-in banner line missing"; exit 1; }
+[ -n "$shown" ] || { echo "FAIL opt-in did not display the content"; exit 1; }
+grep -q 'agent content: shown' "$TMP/log" \
+    && { echo "FAIL the default instance printed the opt-in banner"; exit 1; }
+kill $SRV2 2>/dev/null || true
+wait $SRV2 2>/dev/null || true
+SRV2=""
+echo "smoke: opt-in (LOTEL_AGENT_SHOW_CONTENT) displays content and says so"
 
 echo "smoke: all checks passed"

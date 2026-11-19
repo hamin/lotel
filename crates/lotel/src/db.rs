@@ -294,6 +294,7 @@ mod tests {
             max_bytes: "64MB".into(),
             otlp_addr: "127.0.0.1:0".into(),
             ingest_token: None,
+            agent_show_content: false,
         };
         Db::open(&cfg).expect("open temp db")
     }

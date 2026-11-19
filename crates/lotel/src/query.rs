@@ -17,6 +17,7 @@ use topcoat::{
     view::{BoxView, Unescaped, ViewExt, view},
 };
 
+use crate::config::Config;
 use crate::db::{Db, quote};
 
 /// SQL divisor turning epoch nanoseconds into the epoch SECONDS (fractional,
@@ -972,6 +973,34 @@ pub fn run(db: &Db, plan: &Plan) -> Outcome {
     }
 }
 
+/// The result grid's cells as they are displayed — the SQL console and the
+/// Explore events/breakdown tabs both render through here, so one rule covers
+/// every stored value the page can echo (§5): each cell goes through the shared
+/// redactor unless the operator opted in with `LOTEL_AGENT_SHOW_CONTENT`.
+///
+/// The drill link is built from the *displayed* text too: a masked cell whose
+/// href still carried the raw value would leak the prompt through the link,
+/// which is the very thing the redactor exists to prevent.
+fn display_cells(
+    rows: &[Vec<String>],
+    show_content: bool,
+    href: impl Fn(usize, &str) -> Option<String>,
+) -> Vec<Vec<(String, Option<String>)>> {
+    rows.iter()
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .map(|(ci, cell)| {
+                    let text =
+                        if show_content { cell.clone() } else { crate::agents::redact_cell(cell) };
+                    let link = href(ci, &text);
+                    (text, link)
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// One value in a facet: label, row count, bar width (0-100), and the
 /// click-through URL that toggles a `col = value` filter.
 #[derive(Serialize)]
@@ -1069,7 +1098,9 @@ pub fn drill_url(state: &QueryState, col: &str, val: &str) -> String {
 
 /// Compute facet columns for the current dataset + filters: top values and
 /// (per column) count-distinct and, for numerics, min/max. One query/column.
-pub fn facets(db: &Db, state: &QueryState) -> Vec<Facet> {
+/// Facet labels and their drill links come from stored values, so they go
+/// through the same display redactor as the result cells (plan §5).
+pub fn facets(db: &Db, state: &QueryState, cfg: &Config) -> Vec<Facet> {
     let ds = match dataset(&state.dataset) {
         Some(d) => d,
         None => return vec![],
@@ -1119,11 +1150,14 @@ pub fn facets(db: &Db, state: &QueryState) -> Vec<Facet> {
         let items: Vec<FacetItem> = rows
             .iter()
             .enumerate()
-            .map(|(i, r)| FacetItem {
-                v: r[0].clone(),
-                cnt: cnts[i],
-                pct: (cnts[i] as f64 / top as f64 * 100.0).round() as i64,
-                href: drill_url(state, cd.key, &r[0]),
+            .map(|(i, r)| {
+                let v = cfg.display(&r[0]);
+                FacetItem {
+                    href: drill_url(state, cd.key, &v),
+                    v,
+                    cnt: cnts[i],
+                    pct: (cnts[i] as f64 / top as f64 * 100.0).round() as i64,
+                }
             })
             .collect();
         out.push(Facet {
@@ -1153,6 +1187,7 @@ pub(crate) const PALETTE: [&str; 10] = [
 #[page]
 async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
     let db = context::<Db>(cx);
+    let cfg = context::<Config>(cx);
     let mut s = parse_query_params::<QueryState>(cx).unwrap_or_default();
     // A fresh visit carries no dataset; the builder's select shows Logs, so
     // the compiler must agree rather than fail the first screen with
@@ -1191,7 +1226,7 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
     let events_mode = plan.mode == "events";
 
     // Facets + per-column stats (builder only): one windowed query per column.
-    let facets = if sql_mode { Vec::new() } else { facets(db, &s) };
+    let facets = if sql_mode { Vec::new() } else { facets(db, &s, cfg) };
     let mut stats = serde_json::Map::new();
     for f in &facets {
         stats.insert(
@@ -1234,40 +1269,30 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
         h
     };
     let disp = ds.map(|d| d.display).unwrap_or(&[]);
-    let cells: Vec<Vec<(String, Option<String>)>> = res
-        .rows
-        .iter()
-        .map(|row| {
-            row.iter()
-                .enumerate()
-                .map(|(ci, cell)| {
-                    let href = if events_mode {
-                        // col 0 is time (plain); then one per display column.
-                        if ci == 0 {
-                            None
-                        } else {
-                            disp.get(ci - 1).map(|k| {
-                                if *k == "trace_id" && !cell.is_empty() {
-                                    format!("/traces?trace={}", cell)
-                                } else {
-                                    drill_url(&s, k, cell)
-                                }
-                            })
-                        }
-                    } else if !sql_mode && grouped && ci < ng {
-                        Some(if plan.group_keys[ci] == "trace_id" {
-                            format!("/traces?trace={}", cell)
-                        } else {
-                            drill_url(&s, &plan.group_keys[ci], cell)
-                        })
+    let cells = display_cells(&res.rows, cfg.agent_show_content, |ci, cell| {
+        if events_mode {
+            // col 0 is time (plain); then one per display column.
+            if ci == 0 {
+                None
+            } else {
+                disp.get(ci - 1).map(|k| {
+                    if *k == "trace_id" && !cell.is_empty() {
+                        format!("/traces?trace={}", cell)
                     } else {
-                        None
-                    };
-                    (cell.clone(), href)
+                        drill_url(&s, k, cell)
+                    }
                 })
-                .collect()
-        })
-        .collect();
+            }
+        } else if !sql_mode && grouped && ci < ng {
+            Some(if plan.group_keys[ci] == "trace_id" {
+                format!("/traces?trace={}", cell)
+            } else {
+                drill_url(&s, &plan.group_keys[ci], cell)
+            })
+        } else {
+            None
+        }
+    });
 
     // Result tabs (builder only). Breakdown shows only when grouped.
     let tabs: Vec<(&'static str, &'static str, String, bool)> = if sql_mode {
@@ -1917,5 +1942,49 @@ mod tests {
     fn events_rejects_bad_column_and_operator() {
         let s = state("logs", r#"[{"col":"evil","op":"=","val":"x"}]"#, "", "");
         assert!(compile_events(&s).error.is_some());
+    }
+
+    // ——— privacy: the console / Explore result cells (§5) ———————————————————
+
+    /// The grid every result table renders through: a content value in any
+    /// cell is masked, the placeholder keeps its key and shape, numbers and
+    /// plain text survive, and the drill link is built from the raw value so
+    /// it still matches its row. `LOTEL_AGENT_SHOW_CONTENT` is the only way
+    /// the cell renders as stored.
+    #[test]
+    fn result_cells_run_through_the_shared_redactor() {
+        let rows = vec![
+            vec![
+                "2026-11-17 10:00:00".to_string(),
+                r#"{"event.name":"user_prompt","prompt":"the private prompt"}"#.to_string(),
+                "1500".to_string(),
+            ],
+            vec![
+                "2026-11-17 10:00:01".to_string(),
+                r#"["cli starting","{\"args\":[\"the private command\"]}"]"#.to_string(),
+                "7".to_string(),
+            ],
+        ];
+        let hrefs =
+            |ci: usize, v: &str| if ci == 0 { None } else { Some(format!("/query?cell={ci}&v={v}")) };
+
+        let cells = display_cells(&rows, false, hrefs);
+        let flat: Vec<&str> = cells.iter().flatten().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(flat[0], "2026-11-17 10:00:00", "a timestamp is its own text");
+        assert_eq!(flat[2], "1500", "a number is not re-shaped by the redactor");
+        assert!(flat[1].contains("\"prompt\":\"[REDACTED]\""), "{}", flat[1]);
+        assert!(!flat.iter().any(|t| t.contains("private")), "content leaked: {flat:?}");
+        assert!(flat[4].contains("cli starting"), "the message element is kept: {}", flat[4]);
+        // the drill link is built from the displayed text too: a masked cell
+        // must not hand the value back through its own href
+        let link = cells[0][1].1.as_deref().expect("the drill link stays");
+        assert!(link.contains("[REDACTED]"), "masked label: {link}");
+        assert!(!link.contains("private"), "the href must not carry the value: {link}");
+        assert!(cells[0][0].1.is_none(), "time is not a drill");
+
+        let shown = display_cells(&rows, true, hrefs);
+        assert!(shown[0][1].0.contains("private prompt"), "opt-in shows the cell verbatim");
+        assert!(shown[1][1].0.contains("private command"));
+        assert!(shown[0][1].1.as_deref().is_some_and(|h| h.contains("private prompt")));
     }
 }

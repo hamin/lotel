@@ -1,6 +1,6 @@
-// T1 lands the agent views' query layer and the shared render redactor; the
-// pages that call it are T3–T7, so until they do nothing here has a caller
-// outside its own tests. Remove the allow as the pages wire it up.
+// The agent views' query layer. Its redactor runs on every page today; the
+// session/spend/tool query builders still wait for their pages (T3–T7), so the
+// module keeps its allow until those land.
 #[allow(dead_code)]
 mod agents;
 mod api;
@@ -200,6 +200,11 @@ async fn main() -> anyhow::Result<()> {
         ing.listen_uri, ing.token
     );
     println!("lotel: UI on http://{}:{}", cfg.host, cfg.port);
+    // The opt-in announces itself (§5): a lotel that shows prompt text must
+    // never look like the default one.
+    if let Some(line) = agent_content_line(cfg.agent_show_content) {
+        println!("{line}");
+    }
 
     let listener = tokio::net::TcpListener::bind((cfg.host.as_str(), cfg.port)).await?;
     topcoat::serve(
@@ -324,6 +329,14 @@ fn otlp_http_url(listen_uri: &str) -> String {
     format!("http://{}", listen_uri.trim_start_matches("otlp:"))
 }
 
+/// The startup banner line that makes the §5 content opt-in impossible to
+/// miss: it exists only when `LOTEL_AGENT_SHOW_CONTENT` turned the render
+/// redactor off, so a lotel that shows prompt text never reads like the
+/// private default.
+fn agent_content_line(show_content: bool) -> Option<&'static str> {
+    show_content.then_some("lotel: agent content: shown")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +366,14 @@ mod tests {
             Some("binary stamped 2.0.0, runtime reports 2.1.0")
         );
         assert!(version_mismatch("0.1.0", "").is_some(), "empty runtime is drift");
+    }
+
+    /// The privacy banner (§5): masking is the silent default, and the only
+    /// line that exists is the one admitting content is being shown.
+    #[test]
+    fn the_banner_admits_content_only_when_it_is_shown() {
+        assert_eq!(agent_content_line(false), None, "masked is the quiet default");
+        assert_eq!(agent_content_line(true), Some("lotel: agent content: shown"));
     }
 }
 

@@ -21,6 +21,11 @@ pub struct Config {
     pub otlp_addr: String,
     /// Ingest bearer token; generated at boot when unset.
     pub ingest_token: Option<String>,
+    /// Show agent content — prompt text, tool input/output — verbatim instead
+    /// of masking it at render (`docs/M-agents-plan.md` §5). Off by default:
+    /// what an agent sent stays hidden unless the operator opts in, and then
+    /// the banner and the page markers say so.
+    pub agent_show_content: bool,
 }
 
 impl Config {
@@ -46,6 +51,53 @@ impl Config {
             max_bytes: env::var("LOTEL_MAX_BYTES").unwrap_or_else(|_| "2GB".into()),
             otlp_addr: env::var("LOTEL_OTLP_ADDR").unwrap_or_else(|_| "127.0.0.1:4318".into()),
             ingest_token: env::var("LOTEL_INGEST_TOKEN").ok().filter(|s| !s.is_empty()),
+            agent_show_content: show_content(env::var("LOTEL_AGENT_SHOW_CONTENT").ok().as_deref()),
         })
+    }
+
+    /// Stored text as a page may display it: through the shared render
+    /// redactor ([`crate::agents::redact_cell`], plan §5) unless the operator
+    /// opted in with `LOTEL_AGENT_SHOW_CONTENT`. Nothing here touches the
+    /// store — masking is a display-time decision, and the rows keep whatever
+    /// the agent sent until the retention TTL forgets them.
+    pub(crate) fn display(&self, s: &str) -> String {
+        if self.agent_show_content {
+            s.to_owned()
+        } else {
+            crate::agents::redact_cell(s)
+        }
+    }
+}
+
+/// `LOTEL_AGENT_SHOW_CONTENT` is an opt-in, so only an explicit yes counts:
+/// `1`, `true`, `on`, `yes` (any case, blanks trimmed) turn the redactor off;
+/// unset, empty, `0` and junk all keep content masked.
+fn show_content(raw: Option<&str>) -> bool {
+    matches!(
+        raw.map(|s| s.trim().to_ascii_lowercase()),
+        Some(v) if matches!(v.as_str(), "1" | "true" | "on" | "yes")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::show_content;
+
+    #[test]
+    fn show_content_is_off_unless_told_otherwise() {
+        assert!(!show_content(None), "unset is the privacy default");
+        assert!(!show_content(Some("")));
+        assert!(!show_content(Some("0")));
+        assert!(!show_content(Some("false")));
+        assert!(!show_content(Some("off")));
+        assert!(!show_content(Some("no")));
+        assert!(!show_content(Some("banana")));
+    }
+
+    #[test]
+    fn show_content_accepts_the_usual_yes_spellings() {
+        for v in ["1", "true", "TRUE", "on", "On", "yes", " Yes ", "  1"] {
+            assert!(show_content(Some(v)), "{v} must opt in");
+        }
     }
 }

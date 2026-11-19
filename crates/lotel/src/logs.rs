@@ -16,6 +16,7 @@ use topcoat::{
 };
 
 use crate::{
+    config::Config,
     db::Db,
     filters::{Bar, LOG_COLS, attr_field, empty_range_hint, range_field, service_field},
     ui::{live_refresh, sev_class, thousands},
@@ -24,7 +25,7 @@ use crate::{
 #[cfg(test)]
 mod tests {
     use super::{LogRow, RowView, chip_href, fnv1a};
-    use crate::filters::Bar;
+    use crate::{agents::REDACTED, config::Config, filters::Bar};
 
     fn chips(v: &super::BodyView) -> Vec<(&str, &str)> {
         v.chips.iter().map(|c| (c.k.as_str(), c.v.as_str())).collect()
@@ -200,6 +201,109 @@ mod tests {
         assert_ne!(key(&row("t1", "", "b1")), key(&row("t1", "", "b2")));
         assert_eq!(fnv1a("same"), fnv1a("same"));
     }
+
+    // ——— privacy: the render redactor on the page (§5) ——————————————————————
+
+    /// A boot config that differs only in the content knob, so the render
+    /// tests can say "masking on" / "masking off" without ten fields each.
+    fn cfg(show_content: bool) -> Config {
+        Config {
+            host: "127.0.0.1".into(),
+            port: 0,
+            data_dir: Default::default(),
+            extension_dir: None,
+            ttl_logs: "7 days".into(),
+            ttl_traces: "3 days".into(),
+            ttl_metrics: "30 days".into(),
+            max_bytes: "64MB".into(),
+            otlp_addr: "127.0.0.1:0".into(),
+            ingest_token: None,
+            agent_show_content: show_content,
+        }
+    }
+
+    fn log_row(body: &str, attrs: &str) -> LogRow {
+        LogRow {
+            time: "2026-11-17 10:00:00".into(),
+            service: "opencode".into(),
+            severity: "INFO".into(),
+            body: body.into(),
+            log_attributes: attrs.into(),
+            trace_id: String::new(),
+            span_id: "s1".into(),
+        }
+    }
+
+    /// Everything a row can show, in one string, so a leak anywhere is caught:
+    /// main text, the chip line, and both expanded blobs.
+    fn rendered(v: &RowView) -> String {
+        let chips: Vec<(&str, &str)> = v.chips.iter().map(|c| (c.k.as_str(), c.v.as_str())).collect();
+        format!("{}|{chips:?}|{:?}|{:?}", v.text, v.body_json, v.attrs_json)
+    }
+
+    /// The one real leak in the capture (§2), tested through the renderer the
+    /// page actually uses: the `cli starting` message stays so the row is
+    /// still recognisable, and the command line behind it — the user's prompt
+    /// included — reaches neither the text, the chips, nor the expansion.
+    /// `LOTEL_AGENT_SHOW_CONTENT` is the only way to see it.
+    #[test]
+    fn cli_starting_row_hides_the_payload_unless_content_is_shown() {
+        let canary = "summarise the private file";
+        let payload = format!(r#"{{"version":"2.3.0","args":["run","{canary}"]}}"#);
+        let quoted = format!("{payload:?}");
+        let body = format!(r#"["cli starting",{quoted}]"#);
+        let r = log_row(&body, "{}");
+
+        let hidden = RowView::new(&r.for_display(&cfg(false)), &Bar::default());
+        let shown = RowView::new(&r.for_display(&cfg(true)), &Bar::default());
+
+        assert_eq!(hidden.text, "cli starting", "the message is kept");
+        let pretty = hidden.body_json.as_deref().expect("the body still expands");
+        assert!(pretty.contains(REDACTED), "and shows the placeholder: {pretty}");
+        assert!(!rendered(&hidden).contains(canary), "payload leaked: {}", rendered(&hidden));
+        assert!(!rendered(&hidden).contains("2.3.0"), "the whole element goes: {}", rendered(&hidden));
+
+        // the opt-in is the only switch, and it switches everything back
+        assert!(rendered(&shown).contains(canary), "opt-in must show it: {}", rendered(&shown));
+        assert!(rendered(&shown).contains("2.3.0"));
+    }
+
+    /// A gated attribute is masked in the chips and in the expanded bag while
+    /// the row stays readable: event name, tool name and the numeric length
+    /// companion are exactly what the views chart, and they leak nothing.
+    #[test]
+    fn gated_attributes_are_masked_in_chips_and_in_the_expansion() {
+        let attrs = r#"{"event.name":"user_prompt","prompt":"the private prompt text","prompt_length":22,"tool_name":"bash"}"#;
+        let r = log_row("claude_code.user_prompt", attrs);
+        let v = RowView::new(&r.for_display(&cfg(false)), &Bar::default());
+
+        let chips: Vec<(&str, &str)> = v.chips.iter().map(|c| (c.k.as_str(), c.v.as_str())).collect();
+        assert!(chips.contains(&("tool_name", "bash")), "preferred key keeps its chip: {chips:?}");
+        assert!(chips.contains(&("prompt_length", "22")), "companion survives: {chips:?}");
+        let prompt = chips.iter().find(|(k, _)| *k == "prompt").expect("the key is still listed");
+        assert_eq!(prompt.1, REDACTED);
+
+        let pretty = v.attrs_json.as_deref().expect("the bag still expands");
+        assert!(pretty.contains(&format!("\"prompt\": \"{REDACTED}\"")), "{pretty}");
+        assert!(pretty.contains("user_prompt") && pretty.contains("\"prompt_length\": 22"));
+
+        let all = rendered(&v);
+        assert!(!all.contains("private prompt"), "the text must not survive anywhere: {all}");
+        // and the opt-in puts it back verbatim
+        let shown = RowView::new(&r.for_display(&cfg(true)), &Bar::default());
+        assert!(rendered(&shown).contains("private prompt"), "opt-in must show it");
+    }
+
+    /// Plain-text bodies are not JSON, so only the two display masks apply
+    /// (§5): the address and the home directory go, the words stay.
+    #[test]
+    fn plain_text_rows_keep_their_words_and_lose_their_addresses() {
+        let r = log_row("wrote app.rs for jane.doe@corp.example", "{}");
+        let v = RowView::new(&r.for_display(&cfg(false)), &Bar::default());
+        assert_eq!(v.text, "wrote app.rs for [redacted-email@example.invalid]");
+        let shown = RowView::new(&r.for_display(&cfg(true)), &Bar::default());
+        assert!(shown.text.contains("jane.doe@corp.example"));
+    }
 }
 
 /// One rendered log line.
@@ -212,6 +316,26 @@ pub struct LogRow {
     pub log_attributes: String,
     pub trace_id: String,
     pub span_id: String,
+}
+
+impl LogRow {
+    /// The row as a page may display it: the two columns that carry stored
+    /// text (body, attributes) through the shared render redactor
+    /// ([`crate::agents::redact_cell`], plan §5) unless the operator opted in
+    /// with `LOTEL_AGENT_SHOW_CONTENT`. Identity columns are untouched, so the
+    /// row still links to its own trace, and the store itself is never
+    /// rewritten — this is a display copy.
+    pub(crate) fn for_display(&self, cfg: &Config) -> Self {
+        Self {
+            time: self.time.clone(),
+            service: self.service.clone(),
+            severity: self.severity.clone(),
+            body: cfg.display(&self.body),
+            log_attributes: cfg.display(&self.log_attributes),
+            trace_id: self.trace_id.clone(),
+            span_id: self.span_id.clone(),
+        }
+    }
 }
 
 /// Shared query for the page and the tail fragment endpoint.
@@ -364,7 +488,9 @@ pub(crate) struct RankRow {
 /// Top matches for `q` via capped_fts over the sealed, indexed segments.
 /// Err means "not ready" (no indexed segments yet); the caller degrades to a
 /// note, never an error page — the LIKE list below still covers everything.
-pub(crate) fn fetch_ranked(db: &Db, f: &Bar) -> anyhow::Result<Vec<RankRow>> {
+/// The hit's body is the index's own copy, so it goes through the same
+/// display redactor the row list uses (§5) before it is rendered.
+pub(crate) fn fetch_ranked(db: &Db, f: &Bar, cfg: &Config) -> anyhow::Result<Vec<RankRow>> {
     let cutoff = f.cutoff();
     let service = f.get("service");
     let severity = f.get("severity");
@@ -411,7 +537,7 @@ pub(crate) fn fetch_ranked(db: &Db, f: &Bar) -> anyhow::Result<Vec<RankRow>> {
             time: r[0].clone(),
             service: r[1].clone(),
             severity: r[2].clone(),
-            body: render_body(&r[3], "").text,
+            body: render_body(&cfg.display(&r[3]), "").text,
             score: r[5]
                 .parse::<f64>()
                 .map(|s| format!("{s:.2}"))
@@ -700,7 +826,14 @@ impl RowView {
 /// The table rows — also served bare by `/api/logs` for the tail poller.
 #[component]
 pub(crate) async fn log_rows(cx: &Cx, rows: Vec<LogRow>, bar: Bar) -> Result<impl View> {
-    let rows: Vec<RowView> = rows.iter().map(|r| RowView::new(r, &bar)).collect();
+    // Content is hidden here, not in the store (§5): the page and the tail
+    // fragment render the same masked copy, so neither can leak what the
+    // other one shows.
+    let cfg = context::<Config>(cx);
+    let rows: Vec<RowView> = rows
+        .iter()
+        .map(|r| RowView::new(&r.for_display(cfg), &bar))
+        .collect();
     Ok(view! {
         for row in rows {
             <tr>
@@ -799,6 +932,7 @@ pub(crate) async fn ranked_panel(cx: &Cx, rows: Vec<RankRow>, note: Option<Strin
 #[page]
 async fn logs(cx: &Cx) -> Result<impl View> {
     let db = context::<Db>(cx);
+    let cfg = context::<Config>(cx);
     let bar = Bar::parse(uri(cx).query().unwrap_or(""));
 
     let rows = fetch(db, &bar).unwrap_or_default();
@@ -819,7 +953,7 @@ async fn logs(cx: &Cx) -> Result<impl View> {
     let (ranked_rows, ranked_note) = if q.is_empty() {
         (Vec::new(), None)
     } else {
-        match fetch_ranked(db, &bar) {
+        match fetch_ranked(db, &bar, cfg) {
             Ok(rs) if !rs.is_empty() => (rs, None),
             Ok(_) => (
                 Vec::new(),
@@ -918,6 +1052,7 @@ pub(crate) mod db_tests {
             max_bytes: "64MB".into(),
             otlp_addr: "127.0.0.1:0".into(),
             ingest_token: None,
+            agent_show_content: false,
         };
         Db::open(&cfg).expect("open temp db")
     }

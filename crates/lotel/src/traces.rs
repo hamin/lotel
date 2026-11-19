@@ -17,6 +17,7 @@ use topcoat::{
 };
 
 use crate::{
+    config::Config,
     db::Db,
     filters::{Bar, TRACE_COLS, attr_field, empty_range_hint, range_field, service_field},
     stats,
@@ -116,6 +117,45 @@ pub struct WaterfallSpan {
     pub is_error: bool,
 }
 
+/// The span as a page may display it: the columns that carry stored text
+/// (name, kind, status message, attributes) through the shared render redactor
+/// ([`crate::agents::redact_cell`], plan §5) unless the operator opted in.
+/// Ids, timings and positions are left alone — they build the waterfall, and
+/// they hold nothing an agent typed.
+fn span_for_display(s: &WaterfallSpan, cfg: &Config) -> WaterfallSpan {
+    WaterfallSpan {
+        span_id: s.span_id.clone(),
+        parent: s.parent.clone(),
+        service: s.service.clone(),
+        name: cfg.display(&s.name),
+        kind: cfg.display(&s.kind),
+        status_msg: cfg.display(&s.status_msg),
+        attrs: cfg.display(&s.attrs),
+        ms: s.ms.clone(),
+        depth: s.depth,
+        offset_pct: s.offset_pct,
+        width_pct: s.width_pct,
+        is_error: s.is_error,
+    }
+}
+
+/// One row of the recent-spans feed as displayed: the two columns that carry
+/// stored text (the span name, and the status cell with its message) through
+/// the same redactor. Time, ms and the ids keep their exact text — the trace
+/// link is built from the raw id.
+fn feed_row_for_display(row: &[String], cfg: &Config) -> Vec<String> {
+    row.iter()
+        .enumerate()
+        .map(|(i, v)| {
+            if i == 2 || i == 4 {
+                cfg.display(v)
+            } else {
+                v.clone()
+            }
+        })
+        .collect()
+}
+
 fn kind_label(kind: i64) -> &'static str {
     match kind {
         1 => "internal",
@@ -165,8 +205,11 @@ fn dist_label(b: i64) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{TraceFilters, dist_label, fmt_ms, kind_label, service_class};
-    use crate::filters::Bar;
+    use super::{
+        TraceFilters, WaterfallSpan, dist_label, feed_row_for_display, fmt_ms, kind_label,
+        service_class, span_for_display,
+    };
+    use crate::{agents::REDACTED, config::Config, filters::Bar};
 
     #[test]
     fn durations_format_humably() {
@@ -250,6 +293,99 @@ mod tests {
         assert!(f.errors()[0].contains("soon"));
         // an empty bar is silent
         assert!(TraceFilters::from(Bar::default()).errors().is_empty());
+    }
+
+    // ——— privacy: the render redactor on the page (§5) ——————————————————————
+
+    /// A boot config differing only in the content knob.
+    fn cfg(show_content: bool) -> Config {
+        Config {
+            host: "127.0.0.1".into(),
+            port: 0,
+            data_dir: Default::default(),
+            extension_dir: None,
+            ttl_logs: "7 days".into(),
+            ttl_traces: "3 days".into(),
+            ttl_metrics: "30 days".into(),
+            max_bytes: "64MB".into(),
+            otlp_addr: "127.0.0.1:0".into(),
+            ingest_token: None,
+            agent_show_content: show_content,
+        }
+    }
+
+    /// A span shaped like a Claude Code tool span: an attribute bag with a
+    /// gated key, a status message and a name that carry a person's address
+    /// and home directory.
+    fn span() -> WaterfallSpan {
+        WaterfallSpan {
+            span_id: "s1".into(),
+            parent: String::new(),
+            service: "claude-code".into(),
+            name: "chat with jane.doe@corp.example".into(),
+            kind: "internal".into(),
+            status_msg: "failed reading /Users/jane/keys.pem".into(),
+            attrs: r#"{"tool_input":{"content":"the private prompt"},"tool_name":"bash","duration_ms":1500}"#
+                .into(),
+            ms: "1500".into(),
+            depth: 1,
+            offset_pct: 12.5,
+            width_pct: 40.0,
+            is_error: true,
+        }
+    }
+
+    /// The waterfall labels and the span card show the masked copy: the gated
+    /// attribute value and the personal text go, the keys, the numbers and the
+    /// geometry the bars are drawn from stay exactly as the store has them.
+    #[test]
+    fn waterfall_span_masks_its_stored_text_only() {
+        let s = span();
+        let hidden = span_for_display(&s, &cfg(false));
+
+        assert!(hidden.attrs.contains(&format!("\"tool_input\":\"{REDACTED}\"")), "{}", hidden.attrs);
+        assert!(!hidden.attrs.contains("private prompt"), "gated value leaked: {}", hidden.attrs);
+        assert!(hidden.attrs.contains("tool_name") && hidden.attrs.contains("1500"), "shape stays");
+        assert!(hidden.name.contains("[redacted-email@example.invalid]"), "{}", hidden.name);
+        assert!(!hidden.name.contains("jane.doe"), "{}", hidden.name);
+        assert!(hidden.status_msg.contains("[redacted-path]"), "{}", hidden.status_msg);
+        assert!(!hidden.status_msg.contains("/Users/jane"), "{}", hidden.status_msg);
+
+        // what the page links and draws by must survive masking
+        assert_eq!(hidden.span_id, s.span_id);
+        assert_eq!(hidden.parent, s.parent);
+        assert_eq!((hidden.depth, hidden.offset_pct, hidden.width_pct), (1, 12.5, 40.0));
+        assert!(hidden.is_error);
+
+        // the opt-in is the only way back to the stored text
+        let shown = span_for_display(&s, &cfg(true));
+        assert!(shown.attrs.contains("private prompt") && shown.status_msg.contains("/Users/jane"));
+    }
+
+    /// The recent-spans feed masks the name and status columns and nothing
+    /// else: the time, the numbers and the ids the trace link is built from
+    /// keep their exact text.
+    #[test]
+    fn feed_row_masks_the_two_text_columns() {
+        let row = vec![
+            "2026-11-17 10:00:00".to_string(),
+            "claude-code".into(),
+            "tool: cat /Users/jane/secrets.md".into(),
+            "1500.5".into(),
+            "error: jane.doe@corp.example refused".into(),
+            "t1".into(),
+            "s1".into(),
+        ];
+        let hidden = feed_row_for_display(&row, &cfg(false));
+        assert_eq!(hidden[0], "2026-11-17 10:00:00", "the time column is untouched");
+        assert_eq!(hidden[1], "claude-code");
+        assert_eq!(hidden[3], "1500.5", "ms stays a number the reader can sort");
+        assert_eq!(hidden[5], "t1", "the trace link needs the raw id");
+        assert_eq!(hidden[6], "s1");
+        assert!(hidden[2].contains("[redacted-path]") && !hidden[2].contains("/Users/jane"), "{hidden:?}");
+        assert!(hidden[4].contains("[redacted-email@example.invalid]"), "{hidden:?}");
+
+        assert_eq!(feed_row_for_display(&row, &cfg(true)), row, "opt-in renders the store verbatim");
     }
 }
 
@@ -415,6 +551,7 @@ pub(crate) fn fetch_feed(db: &Db, f: &TraceFilters) -> anyhow::Result<(Vec<Strin
 #[page]
 async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
     let db = context::<Db>(cx);
+    let cfg = context::<Config>(cx);
     let f = TraceFilters::from(Bar::parse(uri(cx).query().unwrap_or("")));
 
     if !f.trace.is_empty() {
@@ -535,6 +672,10 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
     let range_current = f.bar.get("range").to_string();
     let raw_f = f.bar.raw_f();
     let errors = f.errors();
+    // The feed's two text columns go through the shared redactor (§5); the
+    // ids, times and durations stay exactly as the store has them.
+    let feed_rows: Vec<Vec<String>> =
+        feed.1.iter().map(|r| feed_row_for_display(r, cfg)).collect();
 
     Ok(view! {
         <h1>"Traces"</h1>
@@ -613,7 +754,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
                 if let Some(h) = &empty_hint {
                     empty_range_hint(colspan: 6, noun: "spans", href: h.clone())
                 }
-                for row in &feed.1 {
+                for row in &feed_rows {
                     <tr>
                         <td class="muted">(cell(row, 0))</td>
                         <td>(cell(row, 1))</td>
@@ -639,6 +780,12 @@ async fn trace_view(
     selected: Option<WaterfallSpan>,
     back: String,
 ) -> Result<impl View> {
+    // Stored text is masked on the way to the HTML (§5) — the bars, the labels
+    // and the attribute bag all show the redacted copy; the waterfall geometry
+    // and the ids it links by are untouched.
+    let cfg = context::<Config>(cx);
+    let spans: Vec<WaterfallSpan> = spans.iter().map(|s| span_for_display(s, cfg)).collect();
+    let selected = selected.as_ref().map(|s| span_for_display(s, cfg));
     let errors = spans.iter().filter(|s| s.is_error).count();
 
     Ok(view! {
