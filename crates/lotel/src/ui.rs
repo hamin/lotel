@@ -314,7 +314,7 @@ pub(crate) type NavGroup = (Option<&'static str>, &'static [(&'static str, &'sta
 pub(crate) fn nav_groups() -> [NavGroup; 3] {
     [
         (None, &[("Dashboard", "/")]),
-        (Some("Agents"), &[("Sessions", "/sessions"), ("Spend", "/spend")]),
+        (Some("Agents"), &[("Sessions", "/sessions"), ("Spend", "/spend"), ("Tools", "/tools")]),
         (
             Some("Telemetry"),
             &[

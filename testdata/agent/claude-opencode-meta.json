@@ -22,5 +22,8 @@
     "LAN IPs -> [redacted-ip]; URL-encoded home paths -> [redacted-path]",
     "*request_id / *cf_ray keys and req_\u2026 values -> [redacted-id]",
     "error.message -> [REDACTED]"
+  ],
+  "edits": [
+    "T6: one Read call (tool_use_id toolu_012Hnrtty8uXwYNBc1taNyBz) set to success=false on its claude_code.tool.execution span and its tool_result log event, so /tools has a failure to badge; the capture had none"
   ]
 }

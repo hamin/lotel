@@ -82,6 +82,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
         "/" => "Dashboard",
         "/sessions" => "Sessions",
         "/spend" => "Spend",
+        "/tools" => "Tools",
         "/logs" => "Logs",
         "/traces" => "Traces",
         "/metrics" => "Metrics",
@@ -224,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
             // they are registered by hand.
             .page(agents::sessions_page)
             .page(agents::spend_page)
+            .page(agents::tools_page)
             .with(db)
             .with(ing)
             .with(cfg)

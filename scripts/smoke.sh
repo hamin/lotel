@@ -563,6 +563,25 @@ assert "from events" not in spb, "the fixture day has cost metrics: no event fal
 page_total = spb.split('spend-total')[1].split("</b>")[0].split("$")[-1]
 assert page_total == console[0], f"/spend total ${page_total} == console ${console[0]}"
 print(f"PASS  spend: rows, and the page total ${page_total} matches the console")
+# M-Agents T6: /tools — the name from claude_code.tool joined to the outcome
+# on its execution span; the fixture's one failed Read call gets the badge.
+tb6 = unesc(wait_for("tools page lists Bash", "/tools?range=all", "<b>Bash</b>"))
+read_row = tb6.split("<b>Read</b>")[1].split("</tr>")[0]
+assert 'class="badge error"' in read_row and "1 · " in read_row, f"Read's failed call is badged: {read_row[:300]}"
+bash_row = tb6.split("<b>Bash</b>")[1].split("</tr>")[0]
+assert "badge error" not in bash_row and (" s<" in bash_row or " ms<" in bash_row), "Bash: no failures, latencies in ms/s"
+assert "<b></b>" not in tb6, "no nameless execution rows"
+import re as _re
+fail_href = _re.search(r'href="(/logs\?[^"]*success%3Dfalse)"', read_row).group(1)
+assert fail_href == "/logs?range=all&f=tool_name%3DRead&f=success%3Dfalse", fail_href
+_, fb6 = get(fail_href)
+assert fb6.split('id="logrows"')[1].split("</tbody>")[0].count("<tr") == 1, "the failed link lands on the one failed result"
+spans_href = _re.search(r'href="(/traces\?[^"]*)">spans<', bash_row).group(1)
+_, sb6 = get(spans_href)
+assert "claude_code.tool" in sb6, "the spans link lists the tool's spans"
+_, lb6 = get("/logs?range=all&f=tool_name%3DBash")
+assert lb6.split('id="logrows"')[1].split("</tbody>")[0].count("<tr") > 0, "the logs link lists the tool's events"
+print("PASS  tools: joined name + outcome, p50/p95, failure badge")
 check("sessions empty", "/sessions?range=all&f=session.id%3Dnone", "No agent sessions")
 
 _, hb = get("/")

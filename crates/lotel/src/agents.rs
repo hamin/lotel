@@ -125,7 +125,7 @@ pub const EVENT_NAME_PATH: &str = r#"$."event.name""#;
 /// `tool_result`/`tool_decision` events, the `_safe` form the detailed beta
 /// sends alongside it, and Codex's `tool` label (INFERRED — the auth-401
 /// capture emitted no tool calls; open question 4).
-pub const TOOL_NAME_KEYS: &[&str] = &["tool_name", "tool_name_safe", "tool"];
+pub const TOOL_NAME_KEYS: &[&str] = &["tool_name", "gen_ai.tool.name", "tool_name_safe", "tool"];
 
 /// The success key: the strings `"true"`/`"false"` on events, a boolean on
 /// spans (§2 diff 2).
@@ -155,7 +155,13 @@ pub const API_REQUEST_EVENT: &str = "api_request";
 
 /// The spans `/tools` groups, and the Codex metric that stands in when no tool
 /// spans arrived. Both Codex names are INFERRED (open questions 4 and 7).
-pub const TOOL_SPAN_NAMES: &[&str] = &["claude_code.tool.execution", "codex.tool.call"];
+/// The span that names a tool call (Claude Code) — or names it and carries
+/// its outcome (Codex, INFERRED). See [`tool_health_query`].
+pub const TOOL_SPAN_NAMES: &[&str] = &["claude_code.tool", "codex.tool.call"];
+/// Claude Code's child of `claude_code.tool`: the outcome and execution time.
+pub const TOOL_EXECUTION_SPAN: &str = "claude_code.tool.execution";
+/// The key both tool spans carry, pairing a call with its execution.
+pub const TOOL_USE_ID_KEY: &str = "tool_use_id";
 pub const TOOL_METRIC_NAME: &str = "codex.tool.call";
 pub const TOOL_DECISION_EVENT: &str = "tool_decision";
 pub const TOOL_REJECT_DECISION: &str = "reject";
@@ -474,6 +480,18 @@ impl Where {
     /// The `service=…` first-class param (§3): empty means "every agent
     /// service" and filters nothing — the seed's `cart`/`checkout` rows carry
     /// no session keys, so they drop out of the agent views on their own.
+    /// The bar's time range on `time_col` — nothing when it is `all` (the
+    /// default), so an unset range never narrows an agent view.
+    fn since(&mut self, bar: &Bar, time_col: &str, alias: Option<&str>) -> &mut Self {
+        if bar.range_is_narrow() {
+            self.add(
+                &format!("{} >= CAST(? AS TIMESTAMP)", qualify(time_col, alias)),
+                &[bar.cutoff()],
+            );
+        }
+        self
+    }
+
     fn service(&mut self, service: &str, alias: Option<&str>) -> &mut Self {
         if !service.is_empty() {
             self.one(&qualify("service_name", alias), service);
@@ -539,6 +557,7 @@ pub fn sessions_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
         ));
         let mut w = Where::new();
         w.service(service, Some(b.alias))
+            .since(bar, b.time_col, Some(b.alias))
             .bar(bar, b.cols, Some(b.alias));
         sql.where_all(&w);
     }
@@ -633,6 +652,7 @@ pub fn spend_metrics_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     w.service(service, None)
         .in_list("\"name\"", SPEND_METRIC_NAMES)
         .add(SUMMABLE, &[])
+        .since(bar, "time_unix_nano", None)
         .bar(bar, &METRIC_COLS, None);
     sql.where_all(&w)
         .push(" GROUP BY 1, 2, 3 ORDER BY d DESC, usd DESC NULLS LAST");
@@ -668,31 +688,57 @@ pub fn spend_events_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
             &event_name_params(),
             API_REQUEST_EVENT,
         )
+        .since(bar, "time_unix_nano", Some("lg"))
         .bar(bar, &LOG_COLS, Some("lg"));
     sql.where_all(&w)
         .push(" GROUP BY 1, 2, 3 ORDER BY d DESC, usd DESC NULLS LAST");
     sql.finish()
 }
 
-/// `/tools` (§3.4): calls, failures and latency percentiles per tool, from the
-/// tool spans. See [`TOOL_SPAN_NAMES`] on the Codex name.
+/// `/tools` (§3.4): calls, failures and latency percentiles per tool, from
+/// the tool spans.
+///
+/// Measured on Claude Code (T1): a tool call is two spans. `claude_code.tool`
+/// carries the name (`tool_name` / `gen_ai.tool.name`) and its child
+/// `claude_code.tool.execution` carries the outcome (`success`) — and the
+/// execution time, without the wait for the user's approval. Both carry the
+/// call's `tool_use_id`, so each named call left-joins its execution span on
+/// (trace, tool_use_id): outcome and latency come from the execution when it
+/// is there, from the named span otherwise. A Codex `codex.tool.call` span
+/// (INFERRED, [`TOOL_SPAN_NAMES`]) carries both on itself and simply finds no
+/// execution partner.
 pub fn tool_health_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     let mut sql = Sql::new();
-    sql.push("SELECT ")
+    sql.push("WITH t AS (SELECT trace_id, ")
         .expr(&tool_name_expr("span_attributes"), &tool_name_params())
-        .push(" AS tool, count(*) AS calls, count(*) FILTER (WHERE ")
+        .push(" AS tool, ")
+        .expr(&extract("span_attributes"), &[attr_path(TOOL_USE_ID_KEY)])
+        .push(" AS use_id, duration_time_unix_nano AS dur, ")
         .expr(&success_expr("span_attributes"), &success_params())
-        .push(
-            " <> 'true') AS fails, \
-         quantile_cont(duration_time_unix_nano / 1e6, 0.5) AS p50_ms, \
-         quantile_cont(duration_time_unix_nano / 1e6, 0.95) AS p95_ms, \
-         max(duration_time_unix_nano) / 1e6 AS max_ms FROM otel.main.otlp_traces",
-        );
+        .push(" AS ok FROM otel.main.otlp_traces");
     let mut w = Where::new();
     w.service(service, None)
         .in_list("\"name\"", TOOL_SPAN_NAMES)
+        .since(bar, "start_time_unix_nano", None)
         .bar(bar, &TRACE_COLS, None);
-    sql.where_all(&w).push(" GROUP BY 1 ORDER BY calls DESC");
+    sql.where_all(&w);
+    sql.push("), x AS (SELECT trace_id, ")
+        .expr(&extract("span_attributes"), &[attr_path(TOOL_USE_ID_KEY)])
+        .push(" AS use_id, duration_time_unix_nano AS dur, ")
+        .expr(&success_expr("span_attributes"), &success_params())
+        .push(" AS ok FROM otel.main.otlp_traces");
+    let mut wx = Where::new();
+    wx.one("\"name\"", TOOL_EXECUTION_SPAN);
+    sql.where_all(&wx);
+    sql.push(
+        ") SELECT t.tool AS tool, count(*) AS calls, \
+         count(*) FILTER (WHERE COALESCE(x.ok, t.ok) <> 'true') AS fails, \
+         quantile_cont(COALESCE(x.dur, t.dur) / 1e6, 0.5) AS p50_ms, \
+         quantile_cont(COALESCE(x.dur, t.dur) / 1e6, 0.95) AS p95_ms, \
+         max(COALESCE(x.dur, t.dur)) / 1e6 AS max_ms \
+         FROM t LEFT JOIN x ON x.trace_id = t.trace_id AND x.use_id = t.use_id \
+         GROUP BY 1 ORDER BY calls DESC, tool",
+    );
     sql.finish()
 }
 
@@ -712,6 +758,7 @@ pub fn tool_metrics_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     let mut w = Where::new();
     w.service(service, None)
         .one("\"name\"", TOOL_METRIC_NAME)
+        .since(bar, "time_unix_nano", None)
         .bar(bar, &METRIC_COLS, None);
     sql.where_all(&w).push(" GROUP BY 1 ORDER BY calls DESC");
     sql.finish()
@@ -739,6 +786,7 @@ pub fn tool_decisions_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
             &[attr_path("decision")],
             TOOL_REJECT_DECISION,
         )
+        .since(bar, "time_unix_nano", Some("lg"))
         .bar(bar, &LOG_COLS, Some("lg"));
     sql.where_all(&w).push(" GROUP BY 1 ORDER BY 2 DESC");
     sql.finish()
@@ -1499,6 +1547,211 @@ pub(crate) async fn spend_page(cx: &Cx) -> Result<BoxView<'_>> {
     .boxed())
 }
 
+// ————————————————————————————————— tool health (§3.4) —————————————————————————————————
+
+/// One `/tools` row as displayed. Latency is blank for the counter fallback,
+/// which has no durations.
+#[derive(Clone, Debug)]
+pub(crate) struct ToolCells {
+    pub(crate) tool: String,
+    pub(crate) calls: String,
+    pub(crate) fails: String,
+    /// "" when nothing failed, else the failure share ("25%")
+    pub(crate) fail_rate: String,
+    pub(crate) p50: String,
+    pub(crate) p95: String,
+    pub(crate) max: String,
+    pub(crate) rejected: String,
+    /// drill-downs, each keeping the page's range, service and filters:
+    /// the tool's spans, its events, its failed results, its rejections
+    pub(crate) traces_href: String,
+    pub(crate) logs_href: String,
+    pub(crate) fails_href: String,
+    pub(crate) rejected_href: String,
+}
+
+/// `path` under `bar` with every `key=value` filter added (each one through
+/// [`Bar::href_add_filter`], so a filter already on the bar isn't doubled).
+fn href_with_filters(bar: &Bar, path: &str, filters: &[(&str, &str)]) -> String {
+    let mut b = bar.clone();
+    let mut href = b.href(path, &[]);
+    for (k, v) in filters {
+        href = b.href_add_filter(path, &canonical_of(AttrSource::Row, AttrOp::Eq, k, v));
+        b = Bar::parse(href.split_once('?').map(|(_, q)| q).unwrap_or(""));
+    }
+    href
+}
+
+/// Milliseconds the way the waterfall shows them.
+fn ms_cell(s: &str) -> String {
+    match s.parse::<f64>() {
+        Ok(v) if v >= 1000.0 => format!("{:.2} s", v / 1000.0),
+        Ok(v) if v >= 10.0 => format!("{v:.0} ms"),
+        Ok(v) => format!("{v:.1} ms"),
+        Err(_) => s.to_string(),
+    }
+}
+
+/// `/tools`' rows: the spans branch, or — when it has nothing — the Codex
+/// counters; each row with its `tool_decision` rejection count. The second
+/// value says which source answered ("spans" | "metrics").
+pub(crate) fn fetch_tools(db: &Db, bar: &Bar, service: &str, cfg: &Config) -> (Vec<ToolCells>, &'static str) {
+    let run = |(sql, params): (String, Vec<String>)| -> Vec<Vec<String>> {
+        let bind: Vec<&dyn duckdb::ToSql> = params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
+        db.query_rows_with(&sql, &bind).map(|(_, r)| r).unwrap_or_default()
+    };
+    let mut rows = run(tool_health_query(bar, service));
+    let mut source = "spans";
+    if rows.is_empty() {
+        rows = run(tool_metrics_query(bar, service));
+        source = "metrics";
+    }
+    let rejected: std::collections::HashMap<String, String> = run(tool_decisions_query(bar, service))
+        .into_iter()
+        .map(|r| (r[0].clone(), r[1].clone()))
+        .collect();
+    let cells = rows
+        .iter()
+        .filter(|r| !r[0].is_empty())
+        .map(|r| {
+            let get = |i: usize| r.get(i).cloned().unwrap_or_default();
+            let calls = get(1).parse::<f64>().unwrap_or(0.0);
+            let fails = get(2).parse::<f64>().unwrap_or(0.0);
+            // links carry the displayed name: a masked value can't leak via its href
+            let tool = cfg.display(&r[0]);
+            let by_tool = [("tool_name", tool.as_str())];
+            ToolCells {
+                traces_href: href_with_filters(bar, "/traces", &by_tool),
+                logs_href: href_with_filters(bar, "/logs", &by_tool),
+                fails_href: href_with_filters(bar, "/logs", &[("tool_name", &tool), ("success", "false")]),
+                rejected_href: href_with_filters(bar, "/logs", &[("tool_name", &tool), ("decision", TOOL_REJECT_DECISION)]),
+                tool: tool.clone(),
+                calls: thousands(&num_cell(&get(1))),
+                fails: thousands(&num_cell(&get(2))),
+                fail_rate: if fails > 0.0 && calls > 0.0 {
+                    format!("{:.0}%", 100.0 * fails / calls)
+                } else {
+                    String::new()
+                },
+                p50: ms_cell(&get(3)),
+                p95: ms_cell(&get(4)),
+                max: ms_cell(&get(5)),
+                rejected: rejected.get(&r[0]).map(|n| num_cell(n)).unwrap_or_default(),
+            }
+        })
+        .collect();
+    (cells, source)
+}
+
+#[component]
+async fn tool_row(cx: &Cx, c: ToolCells) -> Result<impl View> {
+    Ok(view! {
+        <tr>
+            <td><b>(c.tool.clone())</b></td>
+            <td class="num">(c.calls.clone())</td>
+            <td class="num">
+                if c.fail_rate.is_empty() {
+                    (c.fails.clone())
+                } else {
+                    <a href=(c.fails_href.clone()) title="the failed tool_result events">
+                        <span class="badge error" title=(format!("{} of {} calls failed", c.fails, c.calls))>
+                            (format!("{} · {}", c.fails, c.fail_rate))
+                        </span>
+                    </a>
+                }
+            </td>
+            <td class="num">(c.p50.clone())</td>
+            <td class="num">(c.p95.clone())</td>
+            <td class="num">(c.max.clone())</td>
+            <td class="num">
+                if !c.rejected.is_empty() {
+                    <a href=(c.rejected_href.clone())>(c.rejected.clone())</a>
+                }
+            </td>
+            <td>
+                <a href=(c.traces_href.clone())>"spans"</a>
+                " "
+                <a href=(c.logs_href.clone())>"logs"</a>
+            </td>
+        </tr>
+    })
+}
+
+/// `/tools` (§3.4): per tool, how often the agents called it, how often it
+/// failed, how long it took (p50 / p95 / max execution time), and how often
+/// you said no to it — under the shared [`Bar`].
+#[page("/tools")]
+pub(crate) async fn tools_page(cx: &Cx) -> Result<BoxView<'_>> {
+    let db = context::<Db>(cx);
+    let cfg = context::<Config>(cx);
+    let bar = Bar::parse(uri(cx).query().unwrap_or(""));
+    let service = bar.get("service").to_string();
+
+    let (cells, source) = fetch_tools(db, &bar, &service, cfg);
+    let empty = cells.is_empty();
+    let range_href =
+        (empty && bar.range_is_narrow()).then(|| bar.href("/tools", &[("range", "all")]));
+    let services = agent_services(db);
+    let range = bar.get("range").to_string();
+    let raw_f = bar.raw_f();
+    let attr_errors = bar.attr_errors();
+    let shown = cfg.agent_show_content;
+    let note = if source == "metrics" {
+        "from the tool-call counters: no tool spans in this view, so no latency"
+    } else {
+        "from the tool spans: latency is the execution itself, not the wait for your approval"
+    };
+
+    Ok(view! {
+        <h1>"Tools"</h1>
+        <p class="sub">"Which tools your coding agents call, how often they fail, and how long they take."</p>
+        <p class="meta">
+            (format!("{note} · kept {}", short_ttl(if source == "metrics" { &cfg.ttl_metrics } else { &cfg.ttl_traces })))
+            content_marker(shown: shown)
+        </p>
+
+        <form class="filters" method="get" action="/tools">
+            service_field(options: services, current: service)
+            range_field(current: range)
+            attr_field(raw: raw_f, errors: attr_errors)
+            <button type="submit">"Apply"</button>
+        </form>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>"tool"</th>
+                    <th>"calls"</th>
+                    <th>"failed"</th>
+                    <th>"p50"</th>
+                    <th>"p95"</th>
+                    <th>"max"</th>
+                    <th title="tool_decision events with decision=reject">"you rejected"</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                if let Some(h) = &range_href {
+                    empty_range_hint(colspan: 8, noun: "tool calls", href: h.clone())
+                }
+                if empty {
+                    <tr>
+                        <td colspan="8" class="muted">
+                            "No tool calls in this view. Claude Code sends tool spans with traces on: "
+                            <a href="/setup">"see setup"</a>
+                            ", or clear the filters above."
+                        </td>
+                    </tr>
+                }
+                for c in &cells {
+                    tool_row(c: c.clone())
+                }
+            </tbody>
+        </table>
+    }
+    .boxed())
+}
+
 // ————————————————————————————————— privacy —————————————————————————————————
 
 /// The shared render redactor (§5): the single place stored text is scrubbed
@@ -2003,12 +2256,16 @@ mod tests {
         assert_bound(
             &sql,
             &params,
-            &["claude_code.tool.execution", "codex.tool.call", "bash"],
+            &["claude_code.tool", "codex.tool.call", "claude_code.tool.execution", "bash"],
         );
-        assert!(sql.contains("quantile_cont(duration_time_unix_nano / 1e6, 0.5) AS p50_ms"));
-        assert!(sql.contains("quantile_cont(duration_time_unix_nano / 1e6, 0.95) AS p95_ms"));
+        assert!(sql.contains("quantile_cont(COALESCE(x.dur, t.dur) / 1e6, 0.5) AS p50_ms"));
+        assert!(sql.contains("quantile_cont(COALESCE(x.dur, t.dur) / 1e6, 0.95) AS p95_ms"));
+        assert!(sql.contains("LEFT JOIN x ON x.trace_id = t.trace_id AND x.use_id = t.use_id"));
         assert!(sql.contains("GROUP BY 1 ORDER BY calls DESC"));
         assert!(params.contains(&TOOL_SPAN_NAMES[0].to_string()));
+        assert!(!sql.contains(">= CAST(? AS TIMESTAMP)"), "range=all adds no time condition");
+        let (sql, _) = tool_health_query(&Bar::parse("range=1h"), "");
+        assert!(sql.contains("start_time_unix_nano >= CAST(? AS TIMESTAMP)"), "a narrow range narrows");
 
         let (sql, params) = tool_metrics_query(&bar, "");
         assert_bound(&sql, &params, &["codex.tool.call", "bash"]);
@@ -2152,6 +2409,14 @@ mod tests {
     }
 
     #[test]
+    fn ms_cells_read_like_the_waterfall() {
+        assert_eq!(ms_cell("800.0"), "800 ms");
+        assert_eq!(ms_cell("2.5"), "2.5 ms");
+        assert_eq!(ms_cell("258247.0"), "258.25 s");
+        assert_eq!(ms_cell(""), "");
+    }
+
+    #[test]
     fn spend_cells_read_like_money_and_time() {
         assert_eq!(active_cell("45"), "45s");
         assert_eq!(active_cell("720.4"), "12m");
@@ -2285,10 +2550,10 @@ pub(crate) mod db_tests {
                      '{\"service.name\":\"claude-code\"}', '{\"session.id\":\"ses_cc\"}'),
                     ('2026-11-17 10:00:01', 1000000000, 't1', 'sp2', 'sp1',
                      'claude-code', 'claude_code.tool', 1, 0, '',
-                     '{\"service.name\":\"claude-code\"}', '{\"session.id\":\"ses_cc\",\"tool_name\":\"bash\"}'),
+                     '{\"service.name\":\"claude-code\"}', '{\"session.id\":\"ses_cc\",\"tool_name\":\"bash\",\"tool_use_id\":\"toolu_1\"}'),
                     ('2026-11-17 10:00:01', 800000000, 't1', 'sp3', 'sp2',
                      'claude-code', 'claude_code.tool.execution', 1, 0, '',
-                     '{\"service.name\":\"claude-code\"}', '{\"session.id\":\"ses_cc\",\"success\":false}'),
+                     '{\"service.name\":\"claude-code\"}', '{\"session.id\":\"ses_cc\",\"tool_use_id\":\"toolu_1\",\"success\":false}'),
                     ('2026-11-17 10:00:02', 200000000, 't2', 'sp5', '',
                      'codex_exec', 'codex.tool.call', 1, 0, '',
                      '{\"service.name\":\"codex_exec\"}', '{\"thread_id\":\"conv_9\",\"thread.id\":\"11\",\"tool_name\":\"apply_patch\",\"success\":\"false\"}'),
@@ -2493,6 +2758,55 @@ pub(crate) mod db_tests {
     }
 
     #[test]
+    fn tools_rows_join_names_outcomes_and_rejections() {
+        let db = temp_db("ag-tools-page");
+        seed_logs(&db);
+        seed_traces(&db);
+        seed_metrics(&db);
+        let (cells, source) = super::fetch_tools(&db, &Bar::default(), "", &super::tests::cfg(false));
+        assert_eq!(source, "spans");
+        let bash = cells.iter().find(|c| c.tool == "bash").expect("bash row");
+        assert_eq!((bash.calls.as_str(), bash.fails.as_str(), bash.fail_rate.as_str()), ("1", "1", "100%"));
+        assert_eq!((bash.p50.as_str(), bash.rejected.as_str()), ("800 ms", "1"));
+        assert_eq!(bash.traces_href, "/traces?f=tool_name%3Dbash");
+        assert_eq!(bash.logs_href, "/logs?f=tool_name%3Dbash");
+        assert_eq!(bash.fails_href, "/logs?f=tool_name%3Dbash&f=success%3Dfalse");
+        assert_eq!(bash.rejected_href, "/logs?f=tool_name%3Dbash&f=decision%3Dreject");
+        // the page's own range, service and filters ride along, never doubled
+        let bar = Bar::parse("range=all&service=claude-code&f=tool_name%3Dbash");
+        let (cells, _) = super::fetch_tools(&db, &bar, "claude-code", &super::tests::cfg(false));
+        assert_eq!(cells[0].fails_href, "/logs?range=all&service=claude-code&f=tool_name%3Dbash&f=success%3Dfalse");
+
+        // no tool spans: the Codex counters answer, without latency
+        let (cells, source) = super::fetch_tools(&db, &Bar::default(), "codex_exec", &super::tests::cfg(false));
+        assert_eq!(source, "spans", "codex.tool.call spans exist in the fixture");
+        assert!(cells.iter().any(|c| c.tool == "apply_patch"));
+        let none = Bar::parse("f=tool_name%3Dnot-a-tool");
+        let (cells, source) = super::fetch_tools(&db, &none, "", &super::tests::cfg(false));
+        assert_eq!(source, "metrics", "an empty spans branch falls back to the counters");
+        assert!(cells.is_empty(), "…which the same filter narrows too");
+        let _ = fs::remove_dir_all(&db.data_dir);
+    }
+
+    #[test]
+    fn a_narrow_time_range_narrows_the_agent_views() {
+        // the fixtures sit on 2026-11-17: an hour-wide window ending now
+        // holds none of them, the default (all) holds all of them
+        let db = temp_db("ag-range");
+        seed_logs(&db);
+        seed_traces(&db);
+        seed_metrics(&db);
+        let hour = Bar::parse("range=1h");
+        assert!(fetch_sessions(&db, &hour, "").unwrap().is_empty());
+        assert!(super::fetch_spend(&db, &hour, "").unwrap().is_empty());
+        let (sql, params) = tool_health_query(&hour, "");
+        assert!(rows_of(sql, params, &db).is_empty());
+        assert!(!fetch_sessions(&db, &Bar::default(), "").unwrap().is_empty());
+        assert!(!super::fetch_spend(&db, &Bar::default(), "").unwrap().is_empty());
+        let _ = fs::remove_dir_all(&db.data_dir);
+    }
+
+    #[test]
     fn spend_uses_metrics_and_falls_back_to_events_per_day() {
         // metrics + events for the same day: the metric rows win, no badge
         let db = temp_db("ag-spend-merge");
@@ -2659,15 +2973,19 @@ pub(crate) mod db_tests {
             ],
             "count, failure count and the percentiles, in ms"
         );
-        // §3.4 measured: `tool_name` lives on `claude_code.tool` while
-        // `success` lives on `claude_code.tool.execution`, so the execution
-        // span the plan's name filter selects groups under an empty tool name.
-        // Reported rather than worked around; see the task notes.
-        let nameless = rows
+        // Claude Code: the name from `claude_code.tool`, the outcome and the
+        // execution time (800 ms, not the 1 s span that includes the wait
+        // for approval) from its `claude_code.tool.execution` partner
+        let bash = rows
             .iter()
-            .find(|r| r[0].is_empty())
-            .expect("claude_code.tool.execution carries no tool_name");
-        assert_eq!((nameless[1].as_str(), nameless[2].as_str()), ("1", "1"));
+            .find(|r| r[0] == "bash")
+            .unwrap_or_else(|| panic!("the joined bash row is missing: {rows:?}"));
+        assert_eq!(
+            &bash[..6],
+            ["bash", "1", "1", "800.0", "800.0", "800.0"].map(String::from),
+            "one call, failed per its execution span, timed by it"
+        );
+        assert!(rows.iter().all(|r| !r[0].is_empty()), "no nameless execution rows: {rows:?}");
 
         // the Codex counter fallback, when no tool spans arrived
         let (sql, params) = tool_metrics_query(&Bar::default(), "");
