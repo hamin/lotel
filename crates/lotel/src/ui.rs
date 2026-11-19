@@ -307,10 +307,11 @@ pub(crate) async fn content_marker(cx: &Cx, shown: bool) -> Result<impl View> {
 }
 
 /// Sidebar nav: (label, path).
-pub(crate) fn nav_links() -> [(&'static str, &'static str); 8] {
+pub(crate) fn nav_links() -> [(&'static str, &'static str); 9] {
     [
         ("Dashboard", "/"),
         ("Sessions", "/sessions"),
+        ("Spend", "/spend"),
         ("Logs", "/logs"),
         ("Traces", "/traces"),
         ("Metrics", "/metrics"),

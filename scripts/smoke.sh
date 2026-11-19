@@ -541,6 +541,28 @@ for sid in (CX_SID, "3e122abc"):
     _, ob = get(f"/sessions?range=all&session={sid}")
     assert 'class="wf"' in ob, f"{sid}: other agents' sessions get a waterfall too"
 print("PASS  session timeline: waterfall, span card, event band, codex + opencode")
+# M-Agents T5: /spend — day x model x developer, and its total agrees with
+# the same sum asked of the SQL console (same data, two paths).
+import re
+# ingest is buffered: wait until the cost metric points are queryable, so
+# the page total comes from the metric branch the console sums too
+xsql = "/query?mode=sql&sql=" + urllib.parse.quote(
+    "SELECT printf('%.2f', sum(double_value)) AS usd_total FROM otel.main.otlp_metrics_sum "
+    "WHERE name = 'claude_code.cost.usage' AND COALESCE(aggregation_temporality, 0) <> 2")
+console = []
+for _ in range(30):
+    _, csb = get(xsql)
+    console = re.findall(r"<td[^>]*>\s*(\d+\.\d\d)\s*</td>", csb.split('class="qtablewrap"')[-1])
+    if console:
+        break
+    time.sleep(1)
+assert console, "the cost metric points became queryable"
+_, spb = get("/spend?range=all")
+assert "claude-" in spb and "<td class=\"num\">$" in spb, "a model row with a USD cell"
+assert "from events" not in spb, "the fixture day has cost metrics: no event fallback badge"
+page_total = spb.split('spend-total')[1].split("</b>")[0].split("$")[-1]
+assert page_total == console[0], f"/spend total ${page_total} == console ${console[0]}"
+print(f"PASS  spend: rows, and the page total ${page_total} matches the console")
 check("sessions empty", "/sessions?range=all&f=session.id%3Dnone", "No agent sessions")
 
 _, hb = get("/")

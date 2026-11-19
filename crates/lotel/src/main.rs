@@ -81,6 +81,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
     let active: &'static str = match path.as_str() {
         "/" => "Dashboard",
         "/sessions" => "Sessions",
+        "/spend" => "Spend",
         "/logs" => "Logs",
         "/traces" => "Traces",
         "/metrics" => "Metrics",
@@ -217,6 +218,7 @@ async fn main() -> anyhow::Result<()> {
             // (several routes, one module), so module derivation skips them and
             // they are registered by hand.
             .page(agents::sessions_page)
+            .page(agents::spend_page)
             .with(db)
             .with(ing)
             .with(cfg)

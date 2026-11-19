@@ -135,6 +135,12 @@ pub const SUCCESS_KEY: &str = "success";
 /// `codex.turn.token_usage` is INFERRED — the auth-401 capture emitted no
 /// metrics at all, so it must be pinned against the logged-in Codex run before
 /// T5's Codex column is trusted (open questions 3 and 7).
+/// Sum metric points that may be added up: deltas (temporality 1, what
+/// Claude Code sends by default) and points with no temporality recorded.
+/// A cumulative point (2) is a running total — summing those would count the
+/// same spend again on every export.
+pub const SUMMABLE: &str = "COALESCE(aggregation_temporality, 0) <> 2";
+
 pub const SPEND_METRIC_NAMES: &[&str] = &[
     "claude_code.cost.usage",
     "claude_code.token.usage",
@@ -536,20 +542,20 @@ pub fn sessions_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
             .bar(bar, b.cols, Some(b.alias));
         sql.where_all(&w);
     }
-    sql.push(
+    sql.push(&format!(
         "), cost AS (SELECT json_extract_string(metric_attributes, ?) AS sid, \
-         sum(double_value) AS usd FROM otel.main.otlp_metrics_sum WHERE (\"name\" = ?) GROUP BY 1)\
+         sum(double_value) AS usd FROM otel.main.otlp_metrics_sum WHERE (\"name\" = ?) AND {SUMMABLE} GROUP BY 1)\
          , tok AS (SELECT json_extract_string(metric_attributes, ?) AS sid, \
          sum(double_value) FILTER (WHERE (json_extract_string(metric_attributes, ?) = ?)) AS tin, \
          sum(double_value) FILTER (WHERE (json_extract_string(metric_attributes, ?) = ?)) AS tout \
-         FROM otel.main.otlp_metrics_sum WHERE (\"name\" = ?) GROUP BY 1) \
+         FROM otel.main.otlp_metrics_sum WHERE (\"name\" = ?) AND {SUMMABLE} GROUP BY 1) \
          SELECT ev.sid AS sid, any_value(ev.service_name) AS svc, count(*) AS events, \
          count(*) FILTER (WHERE ev.sig = 'spans') AS spans, min(ev.t) AS first_seen, \
          max(ev.t) AS last_seen, any_value(c.usd) AS usd, any_value(t.tin) AS tok_in, \
          any_value(t.tout) AS tok_out FROM ev LEFT JOIN cost c USING (sid) \
          LEFT JOIN tok t USING (sid) WHERE (ev.sid IS NOT NULL) \
          GROUP BY ev.sid ORDER BY last_seen DESC LIMIT CAST(? AS BIGINT)",
-    );
+    ));
     sql.fill([
         SESSION_ID_PATH.to_string(),
         SPEND_METRIC_NAMES[0].to_string(),
@@ -626,6 +632,7 @@ pub fn spend_metrics_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     let mut w = Where::new();
     w.service(service, None)
         .in_list("\"name\"", SPEND_METRIC_NAMES)
+        .add(SUMMABLE, &[])
         .bar(bar, &METRIC_COLS, None);
     sql.where_all(&w)
         .push(" GROUP BY 1, 2, 3 ORDER BY d DESC, usd DESC NULLS LAST");
@@ -1253,6 +1260,238 @@ pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
                 }
                 for c in &cells {
                     session_row(c: c.clone())
+                }
+            </tbody>
+        </table>
+    }
+    .boxed())
+}
+
+// ————————————————————————————————— spend (§3.3) —————————————————————————————————
+
+/// One `/spend` row: a day × model × developer total, still raw. `from_events`
+/// marks a day the metric branch had no cost for, read off the `api_request`
+/// events instead.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpendRow {
+    pub(crate) day: String,
+    pub(crate) model: String,
+    pub(crate) dev: String,
+    pub(crate) usd: String,
+    pub(crate) tok_in: String,
+    pub(crate) tok_out: String,
+    pub(crate) tok_cache: String,
+    pub(crate) active_s: String,
+    pub(crate) from_events: bool,
+}
+
+/// Both §3.3 branches, merged: every metric row, then the event rows for the
+/// days on which no metric row carries a cost (a logs-only capture, or a
+/// sender with metrics off). Newest day first, priciest first within a day.
+pub(crate) fn fetch_spend(db: &Db, bar: &Bar, service: &str) -> anyhow::Result<Vec<SpendRow>> {
+    let run = |(sql, params): (String, Vec<String>)| -> anyhow::Result<Vec<Vec<String>>> {
+        let bind: Vec<&dyn duckdb::ToSql> = params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
+        Ok(db.query_rows_with(&sql, &bind)?.1)
+    };
+    let mut rows: Vec<SpendRow> = run(spend_metrics_query(bar, service))?
+        .into_iter()
+        .map(|r| SpendRow {
+            day: r[0].clone(),
+            model: r[1].clone(),
+            dev: r[2].clone(),
+            usd: r[3].clone(),
+            tok_in: r[4].clone(),
+            tok_out: r[5].clone(),
+            tok_cache: r[6].clone(),
+            active_s: r[7].clone(),
+            from_events: false,
+        })
+        .collect();
+    let costed: std::collections::HashSet<String> =
+        rows.iter().filter(|r| !r.usd.is_empty()).map(|r| r.day.clone()).collect();
+    // a failed fallback (no logs table yet) leaves the metric rows standing
+    let events = run(spend_events_query(bar, service)).unwrap_or_default();
+    rows.extend(events.into_iter().filter(|r| !costed.contains(&r[0])).map(|r| SpendRow {
+        day: r[0].clone(),
+        model: r[1].clone(),
+        dev: r[2].clone(),
+        usd: r[3].clone(),
+        tok_in: r[4].clone(),
+        tok_out: r[5].clone(),
+        tok_cache: String::new(),
+        active_s: String::new(),
+        from_events: true,
+    }));
+    let usd = |r: &SpendRow| r.usd.parse::<f64>().unwrap_or(-1.0);
+    rows.sort_by(|a, b| b.day.cmp(&a.day).then(usd(b).total_cmp(&usd(a))));
+    Ok(rows)
+}
+
+/// Totals over the shown rows, in the order the strip shows them:
+/// usd, tokens in, out, cache, active seconds.
+pub(crate) fn spend_totals(rows: &[SpendRow]) -> [f64; 5] {
+    let n = |s: &str| s.parse::<f64>().unwrap_or(0.0);
+    rows.iter().fold([0.0; 5], |mut t, r| {
+        t[0] += n(&r.usd);
+        t[1] += n(&r.tok_in);
+        t[2] += n(&r.tok_out);
+        t[3] += n(&r.tok_cache);
+        t[4] += n(&r.active_s);
+        t
+    })
+}
+
+/// Seconds as the table reads them: "45s", "12m", "3h 05m".
+fn active_cell(s: &str) -> String {
+    let Ok(v) = s.parse::<f64>() else { return s.to_string() };
+    let secs = v.round() as i64;
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        _ => format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60),
+    }
+}
+
+/// One `/spend` row as displayed, every stored cell through `Config::display`.
+#[derive(Clone, Debug)]
+pub(crate) struct SpendCells {
+    pub(crate) day: String,
+    pub(crate) model: String,
+    pub(crate) dev: String,
+    pub(crate) dev_full: String,
+    pub(crate) usd: String,
+    pub(crate) tok_in: String,
+    pub(crate) tok_out: String,
+    pub(crate) tok_cache: String,
+    pub(crate) active: String,
+    pub(crate) from_events: bool,
+}
+
+pub(crate) fn spend_cells(r: &SpendRow, cfg: &Config) -> SpendCells {
+    let dev = cfg.display(&r.dev);
+    SpendCells {
+        day: cfg.display(&r.day).chars().take(10).collect(),
+        model: match cfg.display(&r.model) {
+            m if m.is_empty() => "—".to_string(),
+            m => m,
+        },
+        dev: short_id(&dev),
+        dev_full: dev,
+        usd: usd_cell(&cfg.display(&r.usd)),
+        tok_in: token_cell(&cfg.display(&r.tok_in)),
+        tok_out: token_cell(&cfg.display(&r.tok_out)),
+        tok_cache: token_cell(&cfg.display(&r.tok_cache)),
+        active: if r.active_s.is_empty() { String::new() } else { active_cell(&cfg.display(&r.active_s)) },
+        from_events: r.from_events,
+    }
+}
+
+#[component]
+async fn spend_row(cx: &Cx, c: SpendCells) -> Result<impl View> {
+    Ok(view! {
+        <tr>
+            <td class="mono">(c.day.clone())</td>
+            <td>(c.model.clone())</td>
+            <td><span class="mono" title=(c.dev_full.clone())>(c.dev.clone())</span></td>
+            <td class="num">(c.usd.clone())</td>
+            <td class="num">(c.tok_in.clone())</td>
+            <td class="num">(c.tok_out.clone())</td>
+            <td class="num">(c.tok_cache.clone())</td>
+            <td class="num">(c.active.clone())</td>
+            <td>
+                if c.from_events {
+                    <span class="badge" title="no cost metric for this day: summed from api_request events">"from events"</span>
+                }
+            </td>
+        </tr>
+    })
+}
+
+/// `/spend` (§3.3): what the agents cost, by day × model × developer, from
+/// the cost/token/active-time metrics — and from the `api_request` events on
+/// days without them, badged "from events". A totals strip over the rows on
+/// show, under the shared [`Bar`].
+#[page("/spend")]
+pub(crate) async fn spend_page(cx: &Cx) -> Result<BoxView<'_>> {
+    let db = context::<Db>(cx);
+    let cfg = context::<Config>(cx);
+    let bar = Bar::parse(uri(cx).query().unwrap_or(""));
+    let service = bar.get("service").to_string();
+
+    let rows = fetch_spend(db, &bar, &service).unwrap_or_default();
+    let totals = spend_totals(&rows);
+    let any_events = rows.iter().any(|r| r.from_events);
+    let empty = rows.is_empty();
+    let range_href =
+        (empty && bar.range_is_narrow()).then(|| bar.href("/spend", &[("range", "all")]));
+    let cells: Vec<SpendCells> = rows.iter().map(|r| spend_cells(r, cfg)).collect();
+    let services = agent_services(db);
+    let range = bar.get("range").to_string();
+    let raw_f = bar.raw_f();
+    let attr_errors = bar.attr_errors();
+    let shown = cfg.agent_show_content;
+    let t = totals.map(|v| v.to_string());
+    let has_active = totals[4] > 0.0;
+
+    Ok(view! {
+        <h1>"Spend"</h1>
+        <p class="sub">"What your coding agents cost — by day, model and developer."</p>
+        <p class="meta">
+            (format!(
+                "from the cost and token metrics (kept {}), or the api_request events (kept {}) on days without them",
+                short_ttl(&cfg.ttl_metrics),
+                short_ttl(&cfg.ttl_logs),
+            ))
+            content_marker(shown: shown)
+        </p>
+
+        <form class="filters" method="get" action="/spend">
+            service_field(options: services, current: service)
+            range_field(current: range)
+            attr_field(raw: raw_f, errors: attr_errors)
+            <button type="submit">"Apply"</button>
+        </form>
+
+        if !empty {
+            <p class="sub meta spend-total">
+                <span class="seg"><b>(usd_cell(&t[0]))</b>" total"</span>
+                <span class="seg">(token_cell(&t[1]))" in"</span>
+                <span class="seg">(token_cell(&t[2]))" out"</span>
+                <span class="seg">(token_cell(&t[3]))" cache"</span>
+                if has_active { <span class="seg">(active_cell(&t[4]))" active"</span> }
+                if any_events { <span class="seg muted">"some days from events"</span> }
+            </p>
+        }
+
+        <table>
+            <thead>
+                <tr>
+                    <th>"day"</th>
+                    <th>"model"</th>
+                    <th>"developer"</th>
+                    <th>"usd"</th>
+                    <th>"tokens in"</th>
+                    <th>"out"</th>
+                    <th>"cache"</th>
+                    <th>"active"</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                if let Some(h) = &range_href {
+                    empty_range_hint(colspan: 9, noun: "spend", href: h.clone())
+                }
+                if empty {
+                    <tr>
+                        <td colspan="9" class="muted">
+                            "No agent spend in this view. "
+                            <a href="/setup">"Set up Claude Code"</a>
+                            " to send its cost metrics here, or clear the filters above."
+                        </td>
+                    </tr>
+                }
+                for c in &cells {
+                    spend_row(c: c.clone())
                 }
             </tbody>
         </table>
@@ -1913,6 +2152,24 @@ mod tests {
     }
 
     #[test]
+    fn spend_cells_read_like_money_and_time() {
+        assert_eq!(active_cell("45"), "45s");
+        assert_eq!(active_cell("720.4"), "12m");
+        assert_eq!(active_cell("11100"), "3h 05m");
+        let r = SpendRow {
+            day: "2026-11-17 00:00:00".into(), model: String::new(),
+            dev: "4f1c2d3e4f5a6b7c8d9e".into(), usd: "0.31582839999999995".into(),
+            tok_in: "1288.0".into(), tok_out: "1137".into(), tok_cache: String::new(),
+            active_s: "300.2".into(), from_events: true,
+        };
+        let c = spend_cells(&r, &cfg(false));
+        assert_eq!((c.day.as_str(), c.model.as_str(), c.usd.as_str()), ("2026-11-17", "—", "$0.32"));
+        assert_eq!((c.tok_in.as_str(), c.tok_cache.as_str(), c.active.as_str()), ("1,288", "", "5m"));
+        assert_eq!(c.dev, "4f1c2d3e…");
+        assert!(c.from_events);
+    }
+
+    #[test]
     fn number_and_time_cells_treat_the_stored_text() {
         assert_eq!(num_cell("40.0"), "40");
         assert_eq!(num_cell("0.5"), "0.5");
@@ -2060,25 +2317,30 @@ pub(crate) mod db_tests {
             conn.execute_batch(
                 "CREATE TABLE otel.main.otlp_metrics_sum(
                     time_unix_nano TIMESTAMP, \"name\" VARCHAR, double_value DOUBLE,
-                    service_name VARCHAR, resource_attributes VARCHAR, metric_attributes VARCHAR)
+                    service_name VARCHAR, resource_attributes VARCHAR, metric_attributes VARCHAR,
+                    aggregation_temporality INTEGER)
                  WITH (time_col = 'time_unix_nano', ttl = '30 days', max_bytes = '64MB');
                  INSERT INTO otel.main.otlp_metrics_sum
-                     (time_unix_nano, \"name\", double_value, service_name, resource_attributes, metric_attributes)
+                     (time_unix_nano, \"name\", double_value, service_name, resource_attributes, metric_attributes, aggregation_temporality)
                  VALUES
                     ('2026-11-17 10:00:00', 'claude_code.cost.usage', 0.5, 'claude-code',
-                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\"}'),
+                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\"}', 1),
                     ('2026-11-17 10:00:00', 'claude_code.token.usage', 40, 'claude-code',
-                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\",\"type\":\"input\"}'),
+                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\",\"type\":\"input\"}', 1),
                     ('2026-11-17 10:00:00', 'claude_code.token.usage', 7, 'claude-code',
-                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\",\"type\":\"output\"}'),
+                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\",\"type\":\"output\"}', 1),
                     ('2026-11-17 10:00:00', 'claude_code.token.usage', 900, 'claude-code',
-                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\",\"type\":\"cacheRead\"}'),
+                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\",\"type\":\"cacheRead\"}', 1),
                     ('2026-11-17 10:00:00', 'claude_code.active_time.total', 120, 'claude-code',
-                     '{}', '{\"session.id\":\"ses_cc\",\"user.id\":\"dev-1\",\"type\":\"user\"}'),
+                     '{}', '{\"session.id\":\"ses_cc\",\"user.id\":\"dev-1\",\"type\":\"user\"}', 1),
                     ('2026-11-17 10:00:00', 'codex.tool.call', 3, 'codex_exec',
-                     '{}', '{\"tool\":\"apply_patch\",\"success\":\"false\"}'),
+                     '{}', '{\"tool\":\"apply_patch\",\"success\":\"false\"}', 1),
                     ('2026-11-17 10:00:00', 'some.other.metric', 1, 'claude-code',
-                     '{}', '{}');",
+                     '{}', '{}', 1),
+                    -- a cumulative point (temporality 2): a running total,
+                    -- never summed as if it were a delta
+                    ('2026-11-17 09:00:00', 'claude_code.cost.usage', 99, 'claude-code',
+                     '{}', '{\"session.id\":\"ses_cc\",\"model\":\"m-large\",\"user.id\":\"dev-1\"}', 2);",
             )?;
             Ok(())
         })
@@ -2141,7 +2403,7 @@ pub(crate) mod db_tests {
                 vec![
                     "ses_cc".to_string(),
                     "claude-code".to_string(),
-                    "14".to_string(),
+                    "15".to_string(),
                     "3".to_string(),
                     "0.5".to_string()
                 ],
@@ -2192,7 +2454,8 @@ pub(crate) mod db_tests {
         assert_eq!(sids, vec!["run_7".to_string(), "conv_9".to_string(), "ses_cc".to_string()]);
         let cc = rows.iter().find(|r| r.sid == "ses_cc").expect("the claude row");
         assert_eq!(cc.service, "claude-code");
-        assert_eq!(cc.events, "14");
+        assert_eq!(cc.events, "15", "the cumulative point is still an event; it just isn't summed");
+        assert_eq!(cc.usd, "0.5", "the cumulative 99 never reaches the cost");
         assert_eq!(cc.spans, "3");
         assert_eq!(cc.usd, "0.5");
         assert_eq!(num_cell(&cc.tok_in), "40");
@@ -2227,6 +2490,38 @@ pub(crate) mod db_tests {
         assert!(!cx.is_empty(), "codex spans join by thread_id");
         assert!(crate::traces::fetch_session_waterfall(&db, "11").unwrap().0.is_empty(), "OS thread ids are not sessions");
         let _ = std::fs::remove_dir_all(&db.data_dir);
+    }
+
+    #[test]
+    fn spend_uses_metrics_and_falls_back_to_events_per_day() {
+        // metrics + events for the same day: the metric rows win, no badge
+        let db = temp_db("ag-spend-merge");
+        seed_logs(&db);
+        seed_metrics(&db);
+        let rows = super::fetch_spend(&db, &Bar::default(), "").unwrap();
+        assert!(rows.iter().all(|r| !r.from_events), "{rows:?}");
+        assert_eq!(rows[0].usd, "0.5", "cumulative points never summed");
+        let t = super::spend_totals(&rows);
+        assert_eq!((t[0], t[1], t[2], t[3], t[4]), (0.5, 40.0, 7.0, 900.0, 120.0));
+        let _ = fs::remove_dir_all(&db.data_dir);
+
+        // logs only: the day comes from the api_request events, badged
+        let db = temp_db("ag-spend-events");
+        seed_logs(&db);
+        let rows = super::fetch_spend(&db, &Bar::default(), "");
+        // no metrics table at all is an error for the primary branch: the
+        // page shows nothing rather than a half-truth from a broken query
+        assert!(rows.is_err());
+        db.with_conn(|c| c.execute_batch(
+            "CREATE TABLE otel.main.otlp_metrics_sum(time_unix_nano TIMESTAMP, \"name\" VARCHAR,
+               double_value DOUBLE, service_name VARCHAR, resource_attributes VARCHAR,
+               metric_attributes VARCHAR, aggregation_temporality INTEGER)
+             WITH (time_col = 'time_unix_nano', ttl = '30 days', max_bytes = '64MB');",
+        ).map_err(Into::into)).unwrap();
+        let rows = super::fetch_spend(&db, &Bar::default(), "").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].from_events && rows[0].usd == "0.25" && rows[0].model == "m-large", "{rows:?}");
+        let _ = fs::remove_dir_all(&db.data_dir);
     }
 
     #[test]
