@@ -9,14 +9,16 @@ use crate::db::Db;
 
 /// Materialized next to the data dir on boot (embedded → binary is
 /// self-contained; `LOTEL_EXTENSION_DIR` overrides for development).
-const OTLP_EXTENSION: &[u8] =
+/// `pub(crate)` so the Fields panel's fixture tests can `LOAD` it and read
+/// the OTLP JSON fixtures with `read_otlp_*`.
+pub(crate) const OTLP_EXTENSION: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/extensions/otlp.duckdb_extension"));
 
 /// The canonical duckdb-otlp table layout (v0.5 schema) with capped policies.
 /// Kept in sync with the bundled otlp extension; `just fetch-extensions`
 /// documents how the snapshot was taken. `{ttl_*}` and `{max_bytes}` are
 /// filled from the environment.
-const TABLES: &str = r#"
+pub(crate) const TABLES: &str = r#"
 CREATE TABLE IF NOT EXISTS otel.main."otlp_logs"(time_unix_nano TIMESTAMP, observed_time_unix_nano TIMESTAMP, trace_id VARCHAR, span_id VARCHAR, service_name VARCHAR, service_namespace VARCHAR, service_instance_id VARCHAR, severity_number INTEGER, severity_text VARCHAR, event_name VARCHAR, body VARCHAR, resource_attributes VARCHAR, scope_name VARCHAR, scope_version VARCHAR, scope_attributes VARCHAR, log_attributes VARCHAR, dropped_attributes_count INTEGER, flags INTEGER) WITH (time_col = 'time_unix_nano', ttl = '{ttl_logs}', max_bytes = '{max_bytes}', search_columns = 'time_unix_nano,service_name,severity_text,event_name,body,trace_id');
 CREATE TABLE IF NOT EXISTS otel.main."otlp_traces"(start_time_unix_nano TIMESTAMP, duration_time_unix_nano BIGINT, trace_id VARCHAR, span_id VARCHAR, parent_span_id VARCHAR, trace_state VARCHAR, service_name VARCHAR, service_namespace VARCHAR, service_instance_id VARCHAR, "name" VARCHAR, kind INTEGER, status_code INTEGER, status_status_message VARCHAR, resource_attributes VARCHAR, scope_name VARCHAR, scope_version VARCHAR, scope_attributes VARCHAR, span_attributes VARCHAR, events_json VARCHAR, links_json VARCHAR, dropped_attributes_count INTEGER, dropped_events_count INTEGER, dropped_links_count INTEGER, flags INTEGER) WITH (time_col = 'start_time_unix_nano', ttl = '{ttl_traces}', max_bytes = '{max_bytes}');
 CREATE TABLE IF NOT EXISTS otel.main."otlp_metrics_gauge"(time_unix_nano TIMESTAMP, start_time_unix_nano TIMESTAMP, "name" VARCHAR, description VARCHAR, unit VARCHAR, int_value BIGINT, double_value DOUBLE, service_name VARCHAR, service_namespace VARCHAR, service_instance_id VARCHAR, resource_attributes VARCHAR, scope_name VARCHAR, scope_version VARCHAR, scope_attributes VARCHAR, metric_attributes VARCHAR, flags INTEGER, exemplars_json VARCHAR) WITH (time_col = 'time_unix_nano', ttl = '{ttl_metrics}', max_bytes = '{max_bytes}');

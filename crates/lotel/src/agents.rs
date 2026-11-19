@@ -769,8 +769,8 @@ fn mask_value(v: Value) -> Value {
 
 /// The opencode marker that means "the next element is the command line,
 /// prompt included" (§2) — the same test `agent-fixture.sh` applies when it
-/// dumps a fixture.
-fn is_cli_starting(head: &str) -> bool {
+/// dumps a fixture, and the test the Fields panel applies to its payload.
+pub(crate) fn is_cli_starting(head: &str) -> bool {
     head.trim().to_lowercase().starts_with("cli starting")
 }
 

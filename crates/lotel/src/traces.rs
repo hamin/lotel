@@ -19,6 +19,7 @@ use topcoat::{
 use crate::{
     config::Config,
     db::Db,
+    fields::{fields_panel, profile_traces},
     filters::{Bar, TRACE_COLS, attr_field, empty_range_hint, range_field, service_field},
     stats,
     ui::{cell, thousands},
@@ -72,8 +73,8 @@ impl TraceFilters {
 
     /// The AND-joined conditions (without WHERE) over the span columns,
     /// and their bound parameters in order of appearance. The feed, the
-    /// duration distribution and the p95 trend share them.
-    fn conds(&self) -> (Vec<String>, Vec<String>) {
+    /// duration distribution, the p95 trend and the Fields panel share them.
+    pub(crate) fn conds(&self) -> (Vec<String>, Vec<String>) {
         let mut conds = Vec::new();
         let mut params = Vec::new();
         if !self.name.is_empty() {
@@ -676,6 +677,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
     // ids, times and durations stay exactly as the store has them.
     let feed_rows: Vec<Vec<String>> =
         feed.1.iter().map(|r| feed_row_for_display(r, cfg)).collect();
+    let fields = profile_traces(db, &f.bar, cfg);
 
     Ok(view! {
         <h1>"Traces"</h1>
@@ -700,6 +702,8 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
             attr_field(raw: raw_f, errors: errors)
             <button type="submit">"Apply"</button>
         </form>
+
+        fields_panel(panel: fields)
 
         <div class="card lat">
             <div>

@@ -277,6 +277,12 @@ impl Bar {
             .collect()
     }
 
+    /// Every decoded key=value pair, in URL order (forms re-send them as
+    /// hidden inputs).
+    pub fn pairs(&self) -> &[(String, String)] {
+        &self.pairs
+    }
+
     /// The attribute box echo: every `f` value, one per line.
     pub fn raw_f(&self) -> String {
         self.all("f").join("\n")

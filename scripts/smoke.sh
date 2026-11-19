@@ -191,6 +191,39 @@ _, cb = get("/logs")
 assert 'class="kchip" href=' in cb, "attribute chips must be plain GET links"
 print("PASS  shared attribute filters (equals / resource / body / != / inline errors)")
 
+# M-Agents T2b: the Fields panel — what the bar's rows carry. A <details>
+# (no JS) under the facets: a name filter (ff), one closed line per key that
+# opens on its stats and top values, 20 keys a page (fp), empty keys hidden
+# unless fe=1. Each key line is itself a <details>, so the panel ends at its
+# pager, not at the first </details>.
+def fields_panel(body):
+    head, _, tail = unesc(body).split('class="card fields"')[-1].partition('class="fpager"')
+    return head + tail.split("</p>")[0]
+
+_, lbp = get("/logs")
+lpanel = fields_panel(lbp)
+assert 'class="card fields"' in lbp and "from the latest 5,000 rows" in lpanel, "fields panel on /logs"
+assert ">Measures<" in lpanel and "duration_ms" in lpanel, "numeric keys lead as Measures"
+assert "tool_name" in lpanel and 'class="fval"' in lpanel, "string keys list top values with counts"
+assert "/logs?f=tool_name%3Dbash" in unesc(lbp), "a top value links like a chip"
+_, tb = get("/logs?f=tool_name%3Dbash")
+assert "claude_code.tool_result" in tb and "payment authorized" not in tb, "the top-value link returns only matching rows"
+assert "/query?dataset=logs" in lpanel and "%40log_attributes%3A" in lpanel, "numeric keys open Explore on @col:key"
+print("PASS  fields panel on /logs: measures, coverage, top-value link narrows, explore links")
+
+_, ffb = get("/logs?ff=duration")
+ffp = fields_panel(ffb)
+assert "duration_ms" in ffp and "tool_name" not in ffp, "ff narrows the key list by name"
+assert 'name="ff" value="duration"' in ffp and 'open="open"' in unesc(ffb).split('id="fields"')[1].split(">")[0], "the filter echoes and keeps the panel open"
+_, fsb = get("/logs?ff=duration&service=checkout")
+assert 'type="hidden" name="service" value="checkout"' in fields_panel(fsb), "the filter form re-sends the bar"
+lines = lambda b: fields_panel(b).count('class="fline"')
+_, feb = get("/logs?fe=1")
+assert lines(feb) >= lines(lbp), "fe=1 lists empty keys too"
+_, fpb = get("/logs?fp=2")
+assert "fields" in fields_panel(fpb) and fpb.count("payment authorized") == lbp.count("payment authorized"), "fp pages the panel, never the table"
+print("PASS  fields panel: name filter, empty keys, paging leave the table alone")
+
 # J3: an empty list under a time range narrower than all shows a one-line
 # hint linking to the same query at range=all (plain <a>, works with JS off).
 _, hb = get("/logs?range=1h&f=tool_name%3Dnothing-matches-this")
@@ -252,6 +285,14 @@ assert "POST /checkout" not in tb, "status=error must drop the ok span"
 _, jb = get("/traces?mindur=soon&f=nonsense-line")
 assert "Recent spans" in jb and 'class="ferr"' in jb, "bad input is inline, not a 500"
 print("PASS  traces shared bar: feed respects min duration, status and attributes")
+
+# T2b: the same Fields panel on /traces, profiling span attributes + resource.
+_, tbp = get("/traces")
+tplanel = fields_panel(tbp)
+assert 'class="card fields"' in tbp and "from the latest 5,000 rows" in tplanel, "fields panel on /traces"
+assert "http.method" in tplanel and "/traces?f=http.method%3DPOST" in tplanel, "span keys and top-value links"
+assert 'class="fval"' in tplanel and "%40span_attributes%3A" in tplanel, "value counts + explore links"
+print("PASS  fields panel on /traces profiles span and resource attributes")
 
 wait_for("metric catalog", "/metrics", "checkout.queue.depth")
 body = unesc(get("/metrics")[1])

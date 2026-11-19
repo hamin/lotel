@@ -18,6 +18,7 @@ use topcoat::{
 use crate::{
     config::Config,
     db::Db,
+    fields::{fields_panel, profile_logs},
     filters::{Bar, LOG_COLS, attr_field, empty_range_hint, range_field, service_field},
     ui::{live_refresh, sev_class, thousands},
 };
@@ -948,6 +949,7 @@ async fn logs(cx: &Cx) -> Result<impl View> {
     let services = option_values(db, "service_name");
     let severities = option_values(db, "severity_text");
     let facet_groups = facets(db, &bar);
+    let fields = profile_logs(db, &bar, cfg);
 
     let q = bar.get("q").to_string();
     let (ranked_rows, ranked_note) = if q.is_empty() {
@@ -1010,6 +1012,8 @@ async fn logs(cx: &Cx) -> Result<impl View> {
         }
 
         facet_panel(facets: facet_groups)
+
+        fields_panel(panel: fields)
 
         <table>
             <thead>

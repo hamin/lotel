@@ -7,6 +7,7 @@ mod api;
 mod assets;
 mod config;
 mod db;
+mod fields;
 mod filters;
 mod ingest;
 mod logs;

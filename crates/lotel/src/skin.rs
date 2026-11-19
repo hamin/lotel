@@ -315,6 +315,31 @@ details.logx[open] > summary::before { border-left-color: var(--color-ink-2); tr
 .hlabel { color: var(--color-muted); }
 
 
+details.fields { padding-bottom: var(--space-sm); }
+details.fields > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-xs); min-height: 32px; }
+details.fields > summary::-webkit-details-marker { display: none; }
+details.fields > summary::before {
+  content: ""; display: inline-block; margin-right: var(--space-2xs);
+  border-left: 5px solid var(--color-muted-2); border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+}
+details.fields[open] > summary::before { border-left-color: var(--color-ink-2); transform: rotate(90deg); }
+details.fields h3 { font-size: var(--text-md); margin: var(--space-sm) 0 var(--space-2xs); }
+.ffilter { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin: var(--space-xs) 0; }
+.ffilter input[type="search"] { flex: 1 1 14rem; max-width: 24rem; }
+details.fline > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: minmax(0, 16rem) 6rem 3rem minmax(0, 1fr); gap: var(--space-sm); align-items: center; padding: var(--space-3xs) 0; font-size: var(--text-sm); color: var(--color-ink-2); }
+details.fline > summary::-webkit-details-marker { display: none; }
+details.fline > summary:hover .facet-k { color: var(--color-ink); text-decoration: underline; text-decoration-color: var(--color-accent-2); }
+details.fline[open] { padding-bottom: var(--space-xs); }
+.fsum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-muted); }
+.fpager { display: flex; flex-wrap: wrap; gap: var(--space-sm); align-items: baseline; margin: var(--space-sm) 0 0; font-size: var(--text-sm); }
+@media (max-width: 640px) {
+  details.fline > summary { grid-template-columns: minmax(0, 1fr) 3rem; }
+  details.fline > summary .facet-bar { display: none; }
+  details.fline > summary .fsum { grid-column: 1 / -1; }
+}
+.fmeta { font-family: var(--font-mono); font-variation-settings: var(--fv-mono); font-variant-numeric: tabular-nums; font-size: var(--text-xs); color: var(--color-muted); margin: var(--space-3xs) 0 var(--space-2xs); }
+
+
 .spark-line { fill: none; stroke: var(--color-accent-2); stroke-width: 2px; }
 .spark-area { fill: var(--color-accent-2); opacity: 0.14; stroke: none; }
 .err-spark .spark-line, .err-svc-spark .spark-line, .sm-spark .spark-line { stroke: var(--color-bad); }
