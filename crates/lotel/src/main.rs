@@ -79,6 +79,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
 
     let active: &'static str = match path.as_str() {
         "/" => "Dashboard",
+        "/sessions" => "Sessions",
         "/logs" => "Logs",
         "/traces" => "Traces",
         "/metrics" => "Metrics",
@@ -211,6 +212,10 @@ async fn main() -> anyhow::Result<()> {
     topcoat::serve(
         listener,
         module_router!()
+            // The agent pages live in `agents.rs` under explicit absolute paths
+            // (several routes, one module), so module derivation skips them and
+            // they are registered by hand.
+            .page(agents::sessions_page)
             .with(db)
             .with(ing)
             .with(cfg)

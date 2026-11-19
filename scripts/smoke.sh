@@ -196,6 +196,11 @@ print("PASS  shared attribute filters (equals / resource / body / != / inline er
 # opens on its stats and top values, 20 keys a page (fp), empty keys hidden
 # unless fe=1. Each key line is itself a <details>, so the panel ends at its
 # pager, not at the first </details>.
+def fields_tag(body):
+    """The whole <details ... id="fields" ...> open tag: attribute order varies per render."""
+    b = unesc(body); i = b.index('id="fields"')
+    return b[b.rindex("<", 0, i):b.index(">", i)]
+
 def fields_panel(body):
     head, _, tail = unesc(body).split('class="card fields"')[-1].partition('class="fpager"')
     return head + tail.split("</p>")[0]
@@ -214,7 +219,7 @@ print("PASS  fields panel on /logs: measures, coverage, top-value link narrows, 
 _, ffb = get("/logs?ff=duration")
 ffp = fields_panel(ffb)
 assert "duration_ms" in ffp and "tool_name" not in ffp, "ff narrows the key list by name"
-assert 'name="ff" value="duration"' in ffp and 'open="open"' in unesc(ffb).split('id="fields"')[1].split(">")[0], "the filter echoes and keeps the panel open"
+assert 'name="ff" value="duration"' in ffp and 'open="open"' in fields_tag(ffb), "the filter echoes and keeps the panel open"
 _, fsb = get("/logs?ff=duration&service=checkout")
 assert 'type="hidden" name="service" value="checkout"' in fields_panel(fsb), "the filter form re-sends the bar"
 lines = lambda b: fields_panel(b).count('class="fline"')
@@ -471,6 +476,49 @@ assert CANARY_CMD not in sb and "tool_input" in sb and "[REDACTED]" in sb, "span
 assert "denied: /Users/jane" not in sb, "the status message loses the home path"
 print("PASS  waterfall + span card mask stored text, keep ids and keys")
 
+# M-Agents T3: /sessions lists one row per agent session across all three
+# agents, each keyed the way that agent carries it.
+for f, sig in (("claude-opencode-logs", "logs"), ("claude-opencode-traces", "traces"),
+               ("claude-opencode-metrics-sum", "metrics"), ("codex-logs", "logs"),
+               ("codex-traces", "traces")):
+    with open(f"testdata/agent/{f}.json", "rb") as fh:
+        req = urllib.request.Request(f"http://127.0.0.1:14318/v1/{sig}", data=fh.read(), method="POST",
+              headers={"Content-Type": "application/json",
+                       "Authorization": "Bearer lotel-smoke-token-0123456789"})
+        urllib.request.urlopen(req, timeout=10).read()
+CC_SID = "218acd0a-68ea-4150-84e2-5df4bf0af31c"
+CX_SID = "01a1efa1-f56a-7743-b054-c3905d84e95d"
+wait_for("sessions: codex session listed", "/sessions?range=all", CX_SID)
+ss = unesc(wait_for("sessions: claude code session listed", "/sessions?range=all", CC_SID))
+assert "3e122abc" in ss, "an opencode run is a session too"
+assert f"/sessions?range=all&session={CC_SID}" in ss, "each row links its timeline"
+assert f"/logs?range=all&f=session.id%3D{CC_SID}" in ss, "each row links its logs"
+assert f"/traces?range=all&f=session.id%3D{CC_SID}" in ss, "a session with spans links its traces"
+_, tsb = get(f"/traces?range=all&f=session.id%3D{CC_SID}")
+import re
+assert re.search(r"trace=[0-9a-f]{32}", tsb), "the traces link lists the session's traces"
+assert ">11<" not in ss and 'session=11"' not in ss, "codex OS thread numbers are not sessions"
+print("PASS  sessions page: three agents, timeline + logs links, no thread-number sessions")
+for sid in (CC_SID, CX_SID, "3e122abc"):
+    _, nb = get(f"/sessions?range=all&f=session.id%3D{sid}")
+    others = {CC_SID, CX_SID, "3e122abc"} - {sid}
+    assert sid in nb and not any(o in nb for o in others), f"f=session.id narrows to {sid}"
+    _, lb = get(f"/logs?range=all&f=session.id%3D{sid}")
+    # opencode runs only carry the key on spans; Codex log rows land with a NULL
+    # time (it sends timeUnixNano=0, observed time only), so /logs can't list
+    # them yet: follow-up in the OTLP extension, not a /sessions concern.
+    if sid == CC_SID:
+        body_rows = lb.split('id="logrows"')[1].split("</tbody>")[0]
+        assert "<tr" in body_rows, f"the logs link finds {sid}'s rows"
+print("PASS  f=session.id narrows the list for every agent's key, and the logs link lands")
+_, lb = get("/logs?range=all&f=session.id%3Dnone")
+assert "<tr" not in lb.split('id="logrows"')[1].split("</tbody>")[0], "an unknown session finds no logs"
+check("sessions empty", "/sessions?range=all&f=session.id%3Dnone", "No agent sessions")
+
+_, hb = get("/")
+assert "\n.seg {" not in hb and "}.seg {" not in hb and ".ribbon-track .seg {" in hb, \
+    "the ribbon's .seg box style must stay scoped: header .seg labels (trace, services, metrics) share the class"
+print("PASS  .seg segment style scoped to the storage ribbon")
 check("storage ttl",    "/storage", "7d")
 check("storage segs",   "/storage", "Segments")
 

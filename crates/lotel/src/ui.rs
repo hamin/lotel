@@ -294,23 +294,23 @@ pub(crate) fn cell(row: &[String], i: usize) -> String {
 /// can never be read as the private default. While the redactor is on — the
 /// default — it renders nothing: there is nothing to admit.
 ///
-/// The agent pages (T3–T7) interpolate it next to their titles; until they
-/// land it has no caller, hence the allow.
-#[allow(dead_code)]
-pub(crate) fn content_marker(cx: &Cx, shown: bool) -> impl View {
-    view! {
+/// The agent pages (T3–T7) place it next to their titles.
+#[component]
+pub(crate) async fn content_marker(cx: &Cx, shown: bool) -> Result<impl View> {
+    Ok(view! {
         if shown {
             <span class="badge warn" title="LOTEL_AGENT_SHOW_CONTENT is set: prompt and tool content are displayed">
                 "content: shown"
             </span>
         }
-    }
+    })
 }
 
 /// Sidebar nav: (label, path).
-pub(crate) fn nav_links() -> [(&'static str, &'static str); 7] {
+pub(crate) fn nav_links() -> [(&'static str, &'static str); 8] {
     [
         ("Dashboard", "/"),
+        ("Sessions", "/sessions"),
         ("Logs", "/logs"),
         ("Traces", "/traces"),
         ("Metrics", "/metrics"),
@@ -344,18 +344,18 @@ mod tests {
         DEFAULT_SKIN, Skin, content_marker, panel_href, parse_skin, query_has_skin, sev_class,
         short_ttl, skin_readout, thousands,
     };
-    use topcoat::{context::Cx, view::ViewExt};
+    use topcoat::{context::Cx, view::{ViewExt, view}};
 
     /// The opt-in marker (§5): it says `content: shown` when content is being
     /// displayed and stays out of the page otherwise.
     #[tokio::test]
     async fn content_marker_only_appears_when_content_is_shown() {
         let cx = Cx::new();
-        let on = content_marker(&cx, true).single().await.unwrap().render(&cx);
+        let on = { let cx = &cx; view! { content_marker(shown: true) } }.single().await.unwrap().render(&cx);
         assert!(on.contains("content: shown"), "{on}");
         assert!(on.contains("badge warn"), "a house badge, no new CSS: {on}");
 
-        let off = content_marker(&cx, false).single().await.unwrap().render(&cx);
+        let off = { let cx = &cx; view! { content_marker(shown: false) } }.single().await.unwrap().render(&cx);
         assert!(!off.contains("content"), "masked is silent: {off}");
     }
 

@@ -450,9 +450,9 @@ details.fline[open] { padding-bottom: var(--space-xs); }
 .ribbon-name .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ribbon-track { position: relative; height: 26px; background: var(--color-paper-2); border-radius: var(--r-chip); }
 .ribbon-line { position: absolute; left: 0; top: -5px; bottom: -5px; width: 3px; border-radius: 2px; background: var(--color-forget); box-shadow: 0 0 0 1px var(--color-ink); }
-.seg { position: absolute; top: 4px; bottom: 4px; min-width: 4px; border-radius: 4px; background: var(--color-accent-2-soft); border: 1.5px solid var(--color-accent-2); }
-.seg:hover { background: var(--color-accent-2); z-index: var(--z-raised); }
-.seg-open { background: var(--color-accent); border-style: dashed; }
+.ribbon-track .seg { position: absolute; top: 4px; bottom: 4px; min-width: 4px; border-radius: 4px; background: var(--color-accent-2-soft); border: 1.5px solid var(--color-accent-2); }
+.ribbon-track .seg:hover { background: var(--color-accent-2); z-index: var(--z-raised); }
+.ribbon-track .seg-open { background: var(--color-accent); border-style: dashed; }
 .ribbon-next { font-size: var(--text-sm); }
 .ribbon-next b { font-family: var(--font-mono); font-variation-settings: var(--fv-figure); color: var(--color-ink); }
 .ribbon-axis { display: grid; grid-template-columns: 250px minmax(0, 1fr) 210px; gap: var(--space-md); font-size: var(--text-xs); padding: var(--space-2xs) 0 var(--space-xs); }

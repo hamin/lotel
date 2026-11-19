@@ -2,8 +2,9 @@
 //! telemetry read out of the six signal tables (`docs/M-agents-plan.md` §2 is
 //! what the store really holds, §3 what each view reads).
 //!
-//! Data model only — SQL builders plus the shared render redactor (§5). The
-//! pages and routes (T3–T7) call these and own the rendering.
+//! SQL builders plus the shared render redactor (§5), and the first agent
+//! page: T3's `/sessions` list (§3.1). The timeline, spend, tools and setup
+//! pages (T4–T7) join it here.
 //!
 //! Three rules the whole module lives by:
 //!
@@ -26,7 +27,22 @@
 
 use serde_json::{Map, Value};
 
-use crate::filters::{AttrCols, Bar};
+use topcoat::{
+    Result,
+    context::{Cx, context},
+    router::{page, request::uri},
+    view::{BoxView, View, ViewExt, component, view},
+};
+
+use crate::{
+    config::Config,
+    db::Db,
+    filters::{
+        AttrCols, AttrOp, AttrSource, Bar, attr_field, canonical_of, empty_range_hint, range_field,
+        service_field,
+    },
+    ui::{cell, content_marker, short_ttl, thousands},
+};
 
 /// What a masked value becomes: the same placeholder
 /// `scripts/agent-fixture.sh` writes when it dumps fixtures, so a redacted
@@ -75,8 +91,13 @@ pub const CONTENT_KEYS: &[&str] = &[
 
 /// The keys a session id can ride in, in the order the views trust them:
 /// Claude Code's own `session.id` first (docs §1, present on every captured
-/// row), then Codex's `conversation.id` on logs and `thread.id`/`turn.id` on
-/// spans (§2, the owner's capture), then opencode's `opencode.run`.
+/// row), then Codex's `conversation.id` (logs and its session spans) and
+/// `thread_id`/`turn.id` on spans (§2, the owner's capture), then opencode's
+/// `opencode.run`.
+///
+/// Not `thread.id`: on Codex spans it is the OS thread number ("9", "11"),
+/// carried by ~600 of the fixture's 670 spans; as a session key it invented
+/// a "session" per worker thread.
 ///
 /// `opencode.run` is a *resource* attribute and the only per-run key opencode
 /// has (open question 2 ✅), so it comes last: a row carrying a real session
@@ -85,7 +106,6 @@ pub const SESSION_KEYS: &[&str] = &[
     "session.id",
     "gen_ai.conversation.id",
     "conversation.id",
-    "thread.id",
     "thread_id",
     "turn.id",
     "turn_id",
@@ -711,6 +731,307 @@ pub fn tool_decisions_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     sql.finish()
 }
 
+// ————————————————————————————————— pages ———————————————————————————————————
+
+/// One row of `/sessions`: the typed, render-ready projection of
+/// [`sessions_query`]'s SELECT. The query's `first_seen` stays in SQL — the
+/// list only shows "last seen" (§3.1).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SessionRow {
+    pub(crate) sid: String,
+    pub(crate) service: String,
+    pub(crate) events: String,
+    pub(crate) spans: String,
+    pub(crate) last_seen: String,
+    pub(crate) usd: String,
+    pub(crate) tok_in: String,
+    pub(crate) tok_out: String,
+}
+
+/// Run [`sessions_query`] and project its rows. Values arrive still raw: the
+/// renderer runs every displayed cell through `Config::display` (§5).
+pub(crate) fn fetch_sessions(db: &Db, bar: &Bar, service: &str) -> anyhow::Result<Vec<SessionRow>> {
+    let (sql, params) = sessions_query(bar, service);
+    let bind: Vec<&dyn duckdb::ToSql> = params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
+    let (_, rows) = db.query_rows_with(&sql, &bind)?;
+    Ok(rows
+        .into_iter()
+        .map(|r| SessionRow {
+            sid: cell(&r, 0),
+            service: cell(&r, 1),
+            events: cell(&r, 2),
+            spans: cell(&r, 3),
+            last_seen: cell(&r, 5),
+            usd: cell(&r, 6),
+            tok_in: cell(&r, 7),
+            tok_out: cell(&r, 8),
+        })
+        .collect())
+}
+
+/// The bar's service options across all three signals the session union
+/// reads — a session can live in any of them, so the select must offer what
+/// each store holds.
+fn agent_services(db: &Db) -> Vec<String> {
+    db.query_rows(
+        "SELECT DISTINCT service_name FROM (
+             SELECT service_name FROM otel.main.otlp_logs
+             UNION ALL SELECT service_name FROM otel.main.otlp_traces
+             UNION ALL SELECT service_name FROM otel.main.otlp_metrics_sum)
+         WHERE service_name IS NOT NULL AND service_name != '' ORDER BY 1",
+    )
+    .map(|(_, rows)| rows.into_iter().map(|r| cell(&r, 0)).collect())
+    .unwrap_or_default()
+}
+
+/// A numeric that arrived as stored text (DuckDB renders doubles as "40.0")
+/// in the shape the table wants: integers without a dot, decimals without
+/// trailing zeros. Blanks (a `LEFT JOIN` miss) and non-numbers (an error
+/// placeholder) pass through untouched.
+fn num_cell(s: &str) -> String {
+    match s.parse::<f64>() {
+        Ok(v) if v == v.trunc() && v.abs() < 1e15 => format!("{}", v as i64),
+        Ok(_) => s.trim_end_matches('0').trim_end_matches('.').to_string(),
+        Err(_) => s.to_string(),
+    }
+}
+
+/// The USD cell (§3.1: `.num`): a `$` prefix, blank when the session has no
+/// cost rollup.
+fn usd_cell(s: &str) -> String {
+    match s.parse::<f64>() {
+        // cents once there are any; sub-cent sessions keep 4 places so they
+        // don't all read "$0.00"
+        Ok(v) if v.abs() >= 0.01 => format!("${v:.2}"),
+        Ok(0.0) => "$0".to_string(),
+        Ok(v) => format!("${}", format!("{v:.4}").trim_end_matches('0').trim_end_matches('.')),
+        Err(_) => s.to_string(),
+    }
+}
+
+/// A token count: thousands-grouped (`"56922.0"` → `"56,922"`).
+fn token_cell(s: &str) -> String {
+    thousands(&num_cell(s))
+}
+
+/// The session id in its truncated mono form (§3.1): long ids show their
+/// first 8 characters; the whole value stays in the link and the `title`.
+fn short_id(sid: &str) -> String {
+    let chars: Vec<char> = sid.chars().collect();
+    if chars.len() <= 14 {
+        sid.to_string()
+    } else {
+        chars[..8].iter().collect::<String>() + "…"
+    }
+}
+
+/// Last seen as relative text (§3.1): `"42s ago"`, `"5m ago"`, `"3h ago"`,
+/// `"12d ago"`. The store keeps UTC wall time, so the comparison is against
+/// UTC now. Anything unparsable (an error placeholder, epoch junk) renders
+/// as stored.
+fn ago(ts: &str) -> String {
+    let Ok(t) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S%.f") else {
+        return ts.to_string();
+    };
+    let secs = (chrono::Utc::now().naive_utc() - t).num_seconds();
+    if secs < 0 {
+        "now".to_string()
+    } else if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3_600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3_600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
+}
+
+/// One `/sessions` row (§3.1): the truncated mono id linking to the
+/// session's timeline, a service badge, events, spans, USD, tokens in / out,
+/// last seen relative time, and a logs link pre-filtered to the session
+/// (`f=session.id=<sid>` via [`Bar::href_add_filter`]). Every stored cell
+/// goes through `Config::display` — a session id or service name is stored
+/// text like any other (§5). `cfg` rides as a prop, not from context, so the
+/// render tests call this straight.
+#[derive(Clone, Debug)]
+pub(crate) struct SessionCells {
+    pub(crate) timeline: String,
+    pub(crate) logs: String,
+    /// `/traces` pre-filtered to the session; empty when it has no spans.
+    pub(crate) traces: String,
+    pub(crate) sid: String,
+    pub(crate) label: String,
+    pub(crate) service: String,
+    pub(crate) events: String,
+    pub(crate) spans: String,
+    pub(crate) usd: String,
+    pub(crate) tokens: String,
+    pub(crate) last: String,
+}
+
+pub(crate) fn session_cells(row: &SessionRow, bar: &Bar, cfg: &Config) -> SessionCells {
+    let sid = cfg.display(&row.sid);
+    SessionCells {
+        // links carry the displayed id: a masked value can't leak via its href
+        timeline: bar.href("/sessions", &[("session", sid.as_str())]),
+        logs: bar.href_add_filter(
+            "/logs",
+            &canonical_of(AttrSource::Row, AttrOp::Eq, "session.id", &sid),
+        ),
+        traces: if matches!(row.spans.as_str(), "" | "0") {
+            String::new()
+        } else {
+            bar.href_add_filter(
+                "/traces",
+                &canonical_of(AttrSource::Row, AttrOp::Eq, "session.id", &sid),
+            )
+        },
+        label: short_id(&sid),
+        sid,
+        service: cfg.display(&row.service),
+        events: thousands(&cfg.display(&row.events)),
+        spans: thousands(&cfg.display(&row.spans)),
+        usd: usd_cell(&cfg.display(&row.usd)),
+        tokens: match (row.tok_in.is_empty(), row.tok_out.is_empty()) {
+            (true, true) => String::new(),
+            _ => format!(
+                "{} / {}",
+                token_cell(&cfg.display(&row.tok_in)),
+                token_cell(&cfg.display(&row.tok_out))
+            ),
+        },
+        last: ago(&cfg.display(&row.last_seen)),
+    }
+}
+
+#[component]
+async fn session_row(cx: &Cx, c: SessionCells) -> Result<impl View> {
+    Ok(view! {
+        <tr>
+            <td><a class="mono" href=(c.timeline.clone()) title=(c.sid.clone())>(c.label.clone())</a></td>
+            <td><span class="badge">(c.service.clone())</span></td>
+            <td class="num">(c.events.clone())</td>
+            <td class="num">(c.spans.clone())</td>
+            <td class="num">(c.usd.clone())</td>
+            <td class="num">(c.tokens.clone())</td>
+            <td class="muted">(c.last.clone())</td>
+            <td>
+                <a href=(c.logs.clone())>"logs"</a>
+                if !c.traces.is_empty() { " " <a href=(c.traces.clone())>"traces"</a> }
+            </td>
+        </tr>
+    })
+}
+
+/// The `/sessions` empty-state row: a fresh lotel has no agent sessions yet,
+/// and the way to get some is the setup page's copy-paste env vars.
+#[component]
+pub(crate) async fn sessions_empty_row(cx: &Cx, colspan: usize) -> Result<impl View> {
+    Ok(view! {
+        <tr>
+            <td colspan=(colspan.to_string()) class="muted">
+                "No agent sessions in this view. "
+                <a href="/setup">"Set up Claude Code or Codex"</a>
+                " to send telemetry here, or clear the filters above."
+            </td>
+        </tr>
+    })
+}
+
+/// `/sessions` (§3.1, §4): one row per agent session — Claude Code's
+/// `session.id`, Codex's `conversation.id`/`thread_id`, opencode's
+/// `opencode.run` — under the shared [`Bar`], with the retention line every
+/// agent page carries and the `content: shown` marker whenever the opt-in
+/// has it (§5). `?session=<sid>` narrows the list to that session; its
+/// timeline is T4.
+#[page("/sessions")]
+pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
+    let db = context::<Db>(cx);
+    let cfg = context::<Config>(cx);
+    let bar = Bar::parse(uri(cx).query().unwrap_or(""));
+    let service = bar.get("service").to_string();
+    let open = bar.get("session").to_string();
+
+    let mut rows = fetch_sessions(db, &bar, &service).unwrap_or_default();
+    if !open.is_empty() {
+        rows.retain(|r| r.sid == open);
+    }
+    // The logs/traces contract: empty under a window narrower than all
+    // offers the same query at range=all; the setup pointer shows whenever
+    // there is nothing to list.
+    let empty = rows.is_empty();
+    let range_href =
+        (empty && bar.range_is_narrow()).then(|| bar.href("/sessions", &[("range", "all")]));
+    let services = agent_services(db);
+    let cells: Vec<SessionCells> = rows.iter().map(|r| session_cells(r, &bar, cfg)).collect();
+
+    let range = bar.get("range").to_string();
+    let raw_f = bar.raw_f();
+    let attr_errors = bar.attr_errors();
+    let shown = cfg.agent_show_content;
+
+    Ok(view! {
+        <h1>"Sessions"</h1>
+        <p class="sub">
+            "What your coding agents did — one row per Claude Code, Codex and opencode session."
+        </p>
+        <p class="meta">
+            (format!(
+                "logs {} · traces {} · metrics {} · prompt and tool content is never shown; \
+                 anything an agent sends is forgotten after {}/{}",
+                short_ttl(&cfg.ttl_logs),
+                short_ttl(&cfg.ttl_traces),
+                short_ttl(&cfg.ttl_metrics),
+                short_ttl(&cfg.ttl_logs),
+                short_ttl(&cfg.ttl_traces),
+            ))
+            content_marker(shown: shown)
+        </p>
+
+        <form class="filters" method="get" action="/sessions">
+            service_field(options: services, current: service)
+            range_field(current: range)
+            attr_field(raw: raw_f, errors: attr_errors)
+            <button type="submit">"Apply"</button>
+        </form>
+
+        if !open.is_empty() {
+            <p class="muted">
+                "Session timeline is on the way — the row below is " (open.clone())
+                "; its events are already on the logs page."
+            </p>
+        }
+
+        <table>
+            <thead>
+                <tr>
+                    <th>"session"</th>
+                    <th>"service"</th>
+                    <th>"events"</th>
+                    <th>"spans"</th>
+                    <th>"usd"</th>
+                    <th>"tokens in / out"</th>
+                    <th>"last seen"</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                if let Some(h) = &range_href {
+                    empty_range_hint(colspan: 8, noun: "sessions", href: h.clone())
+                }
+                if empty {
+                    sessions_empty_row(colspan: 8)
+                }
+                for c in &cells {
+                    session_row(c: c.clone())
+                }
+            </tbody>
+        </table>
+    }
+    .boxed())
+}
+
 // ————————————————————————————————— privacy —————————————————————————————————
 
 /// The shared render redactor (§5): the single place stored text is scrubbed
@@ -1029,9 +1350,9 @@ mod tests {
         // run id last, so a row carrying several groups by the real id
         assert_eq!(SESSION_KEYS[0], "session.id");
         assert_eq!(SESSION_KEYS[1], "gen_ai.conversation.id");
+        assert!(!SESSION_KEYS.contains(&"thread.id"), "Codex's thread.id is an OS thread number");
         for key in [
             "conversation.id",
-            "thread.id",
             "thread_id",
             "turn.id",
             "turn_id",
@@ -1233,6 +1554,94 @@ mod tests {
         assert!(params.contains(&TOOL_DECISION_EVENT.to_string()));
         assert!(params.contains(&TOOL_REJECT_DECISION.to_string()));
     }
+
+    // ——— /sessions render (T3) —————————————————————————————————————————————
+
+    use topcoat::{context::Cx, view::{ViewExt, view}};
+
+    fn cfg(show: bool) -> Config {
+        Config {
+            host: "127.0.0.1".into(),
+            port: 0,
+            data_dir: std::env::temp_dir(),
+            extension_dir: None,
+            ttl_logs: "7 days".into(),
+            ttl_traces: "3 days".into(),
+            ttl_metrics: "30 days".into(),
+            max_bytes: "64MB".into(),
+            otlp_addr: "127.0.0.1:0".into(),
+            ingest_token: None,
+            agent_show_content: show,
+        }
+    }
+
+    fn row() -> SessionRow {
+        SessionRow {
+            sid: "218acd0a-68ea-4150-84e2-5df4bf0af31c".into(),
+            service: "claude-code".into(),
+            events: "77".into(),
+            spans: "16".into(),
+            last_seen: "2026-11-18 09:00:00".into(),
+            usd: "0.0591256".into(),
+            tok_in: "56922.0".into(),
+            tok_out: "78.0".into(),
+        }
+    }
+
+    /// The empty state (T3 Accept): the list points a fresh user at /setup.
+    #[tokio::test]
+    async fn sessions_empty_row_points_at_setup() {
+        let cx = Cx::new();
+        let html = { let cx = &cx; view! { sessions_empty_row(colspan: 8) } }.single().await.unwrap().render(&cx);
+        assert!(html.to_lowercase().contains("no agent sessions"), "{html}");
+        assert!(html.contains("href=\"/setup\""), "the empty state points at /setup: {html}");
+    }
+
+    /// §3.1's row contract: truncated mono id linking to the timeline, a
+    /// pre-filtered logs link, badge, `.num` cells, relative last seen.
+    #[tokio::test]
+    async fn session_row_links_to_timeline_and_prefiltered_logs() {
+        let cx = Cx::new();
+        let sid = row().sid.clone();
+        let c = session_cells(&row(), &Bar::default(), &cfg(false));
+        assert_eq!(c.timeline, format!("/sessions?session={sid}"), "timeline link");
+        assert_eq!(c.logs, format!("/logs?f=session.id%3D{sid}"), "logs link via href_add_filter");
+        assert_eq!(c.label, "218acd0a…", "id truncated in the cell");
+        assert_eq!(c.usd, "$0.06");
+        assert_eq!(c.traces, format!("/traces?f=session.id%3D{sid}"), "traces link, same filter");
+        assert_eq!(c.tokens, "56,922 / 78", "tokens in / out, no .0 noise");
+        assert!(c.last.ends_with("ago"), "last seen is relative: {}", c.last);
+        let html = { let cx = &cx; view! { session_row(c: c.clone()) } }.single().await.unwrap().render(&cx);
+        assert!(html.contains("218acd0a…") && html.contains("class=\"badge\""), "{html}");
+
+        // no cost/token rollup (Codex, opencode): blank cells, never "$0" or " / "
+        let bare = SessionRow { usd: String::new(), tok_in: String::new(), tok_out: String::new(), ..row() };
+        let b = session_cells(&bare, &Bar::default(), &cfg(false));
+        assert_eq!((b.usd.as_str(), b.tokens.as_str()), ("", ""));
+        let spanless = SessionRow { spans: "0".into(), ..row() };
+        assert_eq!(session_cells(&spanless, &Bar::default(), &cfg(false)).traces, "", "no spans, no traces link");
+    }
+
+    #[test]
+    fn number_and_time_cells_treat_the_stored_text() {
+        assert_eq!(num_cell("40.0"), "40");
+        assert_eq!(num_cell("0.5"), "0.5");
+        assert_eq!(num_cell("0.0189364"), "0.0189364");
+        assert_eq!(num_cell("1200"), "1200");
+        assert_eq!(num_cell(""), "");
+        assert_eq!(num_cell("db error"), "db error");
+        assert_eq!(usd_cell("0.5"), "$0.50");
+        assert_eq!(usd_cell("0.31582839999999995"), "$0.32", "float noise rounds to cents");
+        assert_eq!(usd_cell("0.00985177"), "$0.0099", "sub-cent keeps 4 places");
+        assert_eq!(usd_cell("0"), "$0");
+        assert_eq!(usd_cell(""), "", "a session without the cost metric shows no $0");
+        assert_eq!(token_cell("56922.0"), "56,922");
+        let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S").to_string();
+        assert!(ago(&now).ends_with("ago"), "recent rows read as relative: {}", ago(&now));
+        assert_eq!(ago("not a timestamp"), "not a timestamp");
+        assert_eq!(short_id("run_7"), "run_7");
+        assert_eq!(short_id("218acd0a-68ea-4150-84e2-5df4bf0af31c"), "218acd0a…");
+    }
 }
 
 // ————————————————————————————— DB fixtures ————————————————————————————————
@@ -1244,8 +1653,8 @@ mod tests {
 #[cfg(test)]
 pub(crate) mod db_tests {
     use super::{
-        session_events_query, sessions_query, spend_events_query, spend_metrics_query,
-        tool_decisions_query, tool_health_query, tool_metrics_query,
+        fetch_sessions, num_cell, session_events_query, sessions_query, spend_events_query,
+        spend_metrics_query, tool_decisions_query, tool_health_query, tool_metrics_query,
     };
     use crate::filters::Bar;
     use crate::logs::db_tests::temp_db;
@@ -1308,7 +1717,7 @@ pub(crate) mod db_tests {
     /// Spans shaped like the capture: Claude Code's `interaction → tool →
     /// tool.execution` chain on one session (the tool span carries `tool_name`,
     /// the execution span `success` — §1, §2), a Codex tool span on
-    /// `thread.id`, and opencode's spans keyed only by the resource run id,
+    /// `thread_id`, and opencode's spans keyed only by the resource run id,
     /// across two traces so the waterfall has more than one tree to lay out.
     pub(crate) fn seed_traces(db: &crate::db::Db) {
         db.with_conn(|conn| {
@@ -1335,7 +1744,7 @@ pub(crate) mod db_tests {
                      '{\"service.name\":\"claude-code\"}', '{\"session.id\":\"ses_cc\",\"success\":false}'),
                     ('2026-11-17 10:00:02', 200000000, 't2', 'sp5', '',
                      'codex_exec', 'codex.tool.call', 1, 0, '',
-                     '{\"service.name\":\"codex_exec\"}', '{\"thread.id\":\"conv_9\",\"tool_name\":\"apply_patch\",\"success\":\"false\"}'),
+                     '{\"service.name\":\"codex_exec\"}', '{\"thread_id\":\"conv_9\",\"thread.id\":\"11\",\"tool_name\":\"apply_patch\",\"success\":\"false\"}'),
                     ('2026-11-17 10:00:03', 40000000, 't3', 'sp6', '',
                      'opencode', 'rpc.client', 2, 0, '',
                      '{\"service.name\":\"opencode\",\"opencode.run\":\"run_7\"}', '{}'),
@@ -1475,6 +1884,43 @@ pub(crate) mod db_tests {
         assert!(sessions("ag-none", "f=tool_name%3Dnope", "").is_empty());
         // the bar's cap is honoured
         assert_eq!(sessions("ag-limit", "limit=2", "").len(), 2);
+    }
+
+    /// The page's own data path (beyond the builder): [`fetch_sessions`]
+    /// projects the union rows into the typed shape the row renderer reads,
+    /// and the bar narrows it — the list's `f=session.id=` narrowing, the
+    /// service select's `service=` narrowing, and the empty selection.
+    #[test]
+    fn fetch_sessions_projects_and_narrows() {
+        let db = temp_db("ag-fetch");
+        seed_logs(&db);
+        seed_traces(&db);
+        seed_metrics(&db);
+
+        let rows = fetch_sessions(&db, &Bar::default(), "").expect("fetch sessions");
+        let sids: Vec<String> = rows.iter().map(|r| r.sid.clone()).collect();
+        assert_eq!(sids, vec!["run_7".to_string(), "conv_9".to_string(), "ses_cc".to_string()]);
+        let cc = rows.iter().find(|r| r.sid == "ses_cc").expect("the claude row");
+        assert_eq!(cc.service, "claude-code");
+        assert_eq!(cc.events, "14");
+        assert_eq!(cc.spans, "3");
+        assert_eq!(cc.usd, "0.5");
+        assert_eq!(num_cell(&cc.tok_in), "40");
+        assert_eq!(num_cell(&cc.tok_out), "7");
+        assert!(!cc.last_seen.is_empty(), "last seen carries the union's max time");
+
+        // the logs-page link's filter, fed back through the bar: one row.
+        let only =
+            fetch_sessions(&db, &Bar::parse("f=session.id%3Dconv_9"), "").expect("narrow");
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].sid, "conv_9");
+
+        // an empty selection is an empty list, not an error.
+        let none =
+            fetch_sessions(&db, &Bar::parse("f=session.id%3Dnone"), "").expect("empty");
+        assert!(none.is_empty());
+
+        let _ = fs::remove_dir_all(&db.data_dir);
     }
 
     #[test]

@@ -433,6 +433,16 @@ impl Bar {
             if f.error.is_some() {
                 continue;
             }
+            // `session.id=<id>` is the one cross-agent key: Claude Code,
+            // Codex and opencode keep the id under different names and bags
+            // (agents::SESSION_KEYS), so the equality ORs over all of them.
+            // That is what lets one /sessions link filter any agent's rows.
+            if f.source == AttrSource::Row && f.op == AttrOp::Eq && f.key == "session.id" {
+                let any = crate::agents::session_attr_cols(cols, alias);
+                conds.push(format!("({})", any.join(" OR ")));
+                params.extend(crate::agents::session_attr_params(cols, &f.value));
+                continue;
+            }
             let col = qualify(match f.source {
                 AttrSource::Row => cols.row,
                 AttrSource::Resource => cols.resource,
