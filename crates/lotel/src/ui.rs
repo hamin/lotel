@@ -306,20 +306,29 @@ pub(crate) async fn content_marker(cx: &Cx, shown: bool) -> Result<impl View> {
     })
 }
 
-/// Sidebar nav: (label, path).
-pub(crate) fn nav_links() -> [(&'static str, &'static str); 9] {
+/// One sidebar group: an optional heading over its (label, path) links.
+pub(crate) type NavGroup = (Option<&'static str>, &'static [(&'static str, &'static str)]);
+
+/// Sidebar nav, grouped: the dashboard, then what the coding agents did, then
+/// the general OpenTelemetry views and the store underneath them.
+pub(crate) fn nav_groups() -> [NavGroup; 3] {
     [
-        ("Dashboard", "/"),
-        ("Sessions", "/sessions"),
-        ("Spend", "/spend"),
-        ("Logs", "/logs"),
-        ("Traces", "/traces"),
-        ("Metrics", "/metrics"),
-        ("Explore", "/query"),
-        ("Services", "/services"),
-        ("Storage", "/storage"),
+        (None, &[("Dashboard", "/")]),
+        (Some("Agents"), &[("Sessions", "/sessions"), ("Spend", "/spend")]),
+        (
+            Some("Telemetry"),
+            &[
+                ("Logs", "/logs"),
+                ("Traces", "/traces"),
+                ("Metrics", "/metrics"),
+                ("Explore", "/query"),
+                ("Services", "/services"),
+                ("Storage", "/storage"),
+            ],
+        ),
     ]
 }
+
 
 /// Lowercase severity family for badge styling.
 pub(crate) fn sev_class(sev: &str) -> &'static str {

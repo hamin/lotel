@@ -123,6 +123,11 @@ nav a:hover { background: var(--color-paper-3); color: var(--color-ink); }
 nav a[aria-current="page"] { background: var(--color-accent); color: var(--color-accent-ink); border-color: var(--line-c); font-weight: 700; }
 nav a:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
 
+nav .nav-group {
+  margin: var(--space-sm) 0 0; padding: var(--space-xs) var(--space-sm) 0; border-top: 1px solid var(--color-rule);
+  font-size: var(--text-sm); color: var(--color-muted); font-weight: 500;
+}
+
 main { min-width: 0; padding: 0 var(--gutter) var(--space-3xl); }
 
 .top {
@@ -517,6 +522,8 @@ details.fline[open] { padding-bottom: var(--space-xs); }
   nav { position: static; height: auto; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; border-right: 0; border-bottom: var(--line-w) solid var(--line-c); padding: var(--space-xs) var(--space-sm); }
   nav .brand { margin: 0 var(--space-sm) 0 0; }
   nav a { flex: none; }
+  
+  nav .nav-group { flex: none; align-self: stretch; margin: 0 var(--space-2xs); padding: 0; width: 0; border-top: 0; border-left: 1px solid var(--color-rule); font-size: 0; overflow: hidden; }
   .useby-cap { display: none; }
   .qcols { grid-template-columns: minmax(0, 1fr); }
   .qfacets { position: static; max-height: none; border-left: 0; padding-left: 0; }

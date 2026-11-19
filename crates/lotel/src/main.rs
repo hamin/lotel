@@ -34,7 +34,7 @@ use crate::{
     db::Db,
     ingest::Ingest,
     ui::{
-        CSS, SKIN_COOKIE, UseBy, live_refresh, nav_links, parse_skin, query_has_skin, short_ttl,
+        CSS, SKIN_COOKIE, UseBy, live_refresh, nav_groups, parse_skin, query_has_skin, short_ttl,
         theme_panel, thousands,
     },
 };
@@ -117,14 +117,19 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
                 <div class="layout">
                     <nav>
                         <p class="brand">"lotel"</p>
-                        for (label, href) in nav_links() {
-                            <a href=(href)
-                               if label == active {
-                                   aria-current="page"
-                               }
-                            >
-                                (label)
-                            </a>
+                        for (heading, links) in nav_groups() {
+                            if let Some(h) = heading {
+                                <p class="nav-group">(h)</p>
+                            }
+                            for (label, href) in links.iter().copied() {
+                                <a href=(href)
+                                   if label == active {
+                                       aria-current="page"
+                                   }
+                                >
+                                    (label)
+                                </a>
+                            }
                         }
                     </nav>
                     <main>
