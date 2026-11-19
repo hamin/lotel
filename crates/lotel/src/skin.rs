@@ -520,7 +520,8 @@ details.fline[open] { padding-bottom: var(--space-xs); }
 
 @media (max-width: 60rem) {
   :root { --gutter: 20px; }
-  .layout { grid-template-columns: minmax(0, 1fr); }
+  
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   nav { position: static; height: auto; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; border-right: 0; border-bottom: var(--line-w) solid var(--line-c); padding: var(--space-xs) var(--space-sm); }
   nav .brand { margin: 0 var(--space-sm) 0 0; }
   nav a { flex: none; }
@@ -538,6 +539,11 @@ details.fline[open] { padding-bottom: var(--space-xs); }
   h1 { font-size: var(--text-2xl); }
   input, select { font-size: 16px; }
   .facet-row, .dist-row, .hrow { grid-template-columns: 6.5rem minmax(0, 1fr) 4.5rem; }
+  
+  main table { display: block; max-width: 100%; overflow-x: auto; }
+  main td.num, main td.mono { white-space: nowrap; }
+  
+  main td.logbody { width: auto; max-width: none; min-width: 16rem; }
 }
 
 
