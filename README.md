@@ -15,7 +15,7 @@ forgotten.
 ```
 OTLP/HTTP :4318 ──▶ otlp extension ──▶ capped DuckDB tables ──▶ parquet segments + manifests
                                                       │
-                                           Topcoat UI :8080 (dashboard · logs · traces · metrics · storage)
+                                           Topcoat UI :8080 (sessions · spend · tools · logs · traces · metrics · storage)
 ```
 
 ## Install
@@ -79,11 +79,32 @@ scripts/otlp-gen.py --once            # one burst, then exit
 scripts/otlp-gen.py --for 60          # stream for 60s (token from $LOTEL_TOKEN or --token)
 ```
 
-## Send your coding agent's telemetry
+## Agents
 
-Claude Code already speaks OpenTelemetry — set these in the shell you run
-`claude` from, and every model call, tool run and permission decision lands in
-lotel:
+lotel has pages built for coding-agent telemetry, grouped under **Agents** in
+the sidebar. Claude Code, Codex and opencode all speak OpenTelemetry; point
+one at lotel and its sessions, spend and tool calls show up within seconds.
+
+- **Setup** (`/setup`) — copy-paste blocks with this instance's endpoint and
+  token already filled in: a shell `export` block for Claude Code (the same
+  variables work in the `env` map of `~/.claude/settings.json`), an `[otel]`
+  section for `~/.codex/config.toml`, and the same Codex settings as `-c`
+  overrides for one `codex exec` run.
+- **Sessions** (`/sessions`) — one row per agent session across all agents:
+  agent, events, spans, cost, tokens and when it was last seen, with links to
+  its logs and traces. Open a session for its timeline:
+  every event in order, repeats folded, each with its attribute chips.
+- **Spend** (`/spend`) — cost and tokens per day, model and agent, from the
+  agents' own cost metrics (cumulative counters are never summed), with event
+  rows filling in days a metric didn't cover.
+- **Tools** (`/tools`) — per tool: calls, failures, rejections, p50/p95
+  duration, each count linking to the spans and logs behind it.
+
+Logs and traces link to each other wherever the other side exists: a log row
+links to its trace when that trace is still stored, and a trace or span shows
+how many logs carry its id.
+
+For Claude Code, the short version (`/setup` prints it with your token):
 
 ```sh
 # in the shell you run claude from
@@ -97,10 +118,18 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token lotel prints>"
 ```
 
-> **Before you point an agent at it:** agents may send prompt text — opencode,
-> for example, logs its full command line including the prompt — and lotel
-> stores everything it receives until the retention TTL drops it. Treat the
-> data directory as sensitive.
+**Privacy: hide, then forget.** Some agents send prompt or tool text (opencode,
+for example, logs its full command line, prompt included). lotel stores what
+it receives, but every page masks that content when it renders: prompts,
+tool input and output, and command lines show as `[REDACTED]` everywhere the
+UI shows stored text. The rows themselves are dropped at the
+retention line like everything else. To see the content on your own machine,
+start lotel with `LOTEL_AGENT_SHOW_CONTENT=1`. Either way, treat the data
+directory as sensitive.
+
+Known gap: Codex currently sends its log records with a zero timestamp, which
+the store reads as "no time", so Codex logs don't list on `/logs` yet (its
+traces and sessions do). The fix belongs in the OTLP extension.
 
 ## What you get
 
@@ -198,7 +227,7 @@ cargo build                             # rebuild
 ## Configuration (env-only, read at boot)
 
 All operator-facing settings are environment variables read once at boot.
-The first nine are read in
+The first ten are read in
 [`crates/lotel/src/config.rs`](crates/lotel/src/config.rs); `LOTEL_MEMORY_LIMIT`
 and `LOTEL_THREADS` are read in
 [`crates/lotel/src/db.rs`](crates/lotel/src/db.rs). The defaults below are the
@@ -215,6 +244,7 @@ literals in those files.
 | `LOTEL_TTL_TRACES` | `3 days` | per-signal age cap for traces |
 | `LOTEL_TTL_METRICS` | `30 days` | per-signal age cap for metrics |
 | `LOTEL_MAX_BYTES` | `2GB` | per-table size cap |
+| `LOTEL_AGENT_SHOW_CONTENT` | unset (content masked) | `1`/`true`/`on`/`yes` shows agents' prompt and tool text instead of masking it at render |
 | `LOTEL_MEMORY_LIMIT` | `1GB` | DuckDB `memory_limit` — a leash on DuckDB's own buffer-pool accounting (not third-party extension allocations) |
 | `LOTEL_THREADS` | unset (DuckDB's own default: one per core) | `SET threads` — cap DuckDB's worker threads |
 
@@ -291,7 +321,9 @@ live tail and facets + BM25, trace waterfall, metric charts, latency analytics
 sparklines, storage view, theme/skin panel, the local test ladder (smoke /
 stress / soak / tenant-proof), the readable-body + shared-filter-bar Explore
 improvements, and the M18 release surface (`--version`, `just dist`,
-`install.sh`, `just docker`).
+`install.sh`, `just docker`). M-agents added the agent pages (`/sessions` with
+per-session timelines, `/spend`, `/tools`, `/setup`), log/trace cross-links,
+render-time content masking and phone-width layouts.
 
 M19 (public release automation — git remote, GitHub Releases, CI matrix,
 signed macOS binaries), M20 (multi-tenant control plane) and the backlog are
