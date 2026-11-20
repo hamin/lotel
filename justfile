@@ -69,3 +69,28 @@ stress:
 #   N=500 just agent-stress
 agent-stress:
     ./scripts/agent-stress.sh
+
+# Agent dev instance: UI http://127.0.0.1:18095, OTLP :14395, data in
+# ~/lotel-agents. The ingest token is kept in ~/.config/lotel/agents-dev.token
+# (made on first run) so agent settings pointing here survive restarts.
+# Ctrl-C stops it.
+#   just agents-dev          prompt/tool content masked (default)
+#   just agents-dev show     prompt/tool content shown (LOTEL_AGENT_SHOW_CONTENT=1)
+agents-dev content="hide":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{content}}" in
+        hide) show=0 ;;
+        show) show=1 ;;
+        *) echo "usage: just agents-dev [show]" >&2; exit 2 ;;
+    esac
+    cargo build --release
+    tok="$HOME/.config/lotel/agents-dev.token"
+    if [ ! -s "$tok" ]; then
+        mkdir -p "$(dirname "$tok")"
+        (umask 077; openssl rand -hex 24 > "$tok")
+    fi
+    echo "agents-dev: http://127.0.0.1:18095  (content: $([ "$show" = 1 ] && echo shown || echo masked))"
+    LOTEL_ADDR=127.0.0.1:18095 LOTEL_OTLP_ADDR=127.0.0.1:14395 \
+    LOTEL_DATA_DIR="$HOME/lotel-agents" LOTEL_INGEST_TOKEN="$(cat "$tok")" \
+    LOTEL_AGENT_SHOW_CONTENT="$show" exec ./target/release/lotel
