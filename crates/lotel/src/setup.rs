@@ -18,7 +18,7 @@ use topcoat::{
     view::{View, component, view},
 };
 
-use crate::{filters::Bar, ingest::Ingest};
+use crate::{config::Config, filters::Bar, ingest::Ingest, ui::{content_marker, content_policy}};
 
 /// The panes, in tab order: (id, label).
 const TABS: [(&str, &str); 3] = [
@@ -143,6 +143,11 @@ async fn setup_pane(cx: &Cx, title: String, hint: String, block: String) -> Resu
 #[page("/setup")]
 pub(crate) async fn setup_page(cx: &Cx) -> Result<impl View> {
     let ing = context::<Ingest>(cx);
+    let shown = context::<Config>(cx).agent_show_content;
+    let policy = format!(
+        "On this instance {}, and everything an agent sends is forgotten at the retention line.",
+        content_policy(shown)
+    );
     let bar = Bar::parse(uri(cx).query().unwrap_or(""));
     let tab = match bar.get("tab") {
         t @ ("codex" | "codex-run") => t.to_string(),
@@ -175,7 +180,8 @@ pub(crate) async fn setup_page(cx: &Cx) -> Result<impl View> {
         <h1>"Setup"</h1>
         <p class="sub">"Point Claude Code or Codex at this lotel. The endpoint and token below are this instance's."</p>
         <p class="meta">
-            "Prompt and tool content is never shown here, and everything an agent sends is forgotten at the retention line."
+            (policy)
+            content_marker(shown: shown)
         </p>
         <div class="rtabs">
             for (id, label) in TABS {

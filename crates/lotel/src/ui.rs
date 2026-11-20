@@ -306,6 +306,17 @@ pub(crate) async fn content_marker(cx: &Cx, shown: bool) -> Result<impl View> {
     })
 }
 
+/// How the agent pages describe prompt and tool content, matching what this
+/// instance does: hidden by default, shown only under the opt-in. The
+/// "content: shown" badge ([`content_marker`]) sits beside it.
+pub(crate) fn content_policy(shown: bool) -> &'static str {
+    if shown {
+        "prompt and tool content is shown (LOTEL_AGENT_SHOW_CONTENT is set)"
+    } else {
+        "prompt and tool content is hidden"
+    }
+}
+
 /// One sidebar group: an optional heading over its (label, path) links.
 pub(crate) type NavGroup = (Option<&'static str>, &'static [(&'static str, &'static str)]);
 
@@ -367,6 +378,13 @@ mod tests {
 
         let off = { let cx = &cx; view! { content_marker(shown: false) } }.single().await.unwrap().render(&cx);
         assert!(!off.contains("content"), "masked is silent: {off}");
+    }
+
+    #[test]
+    fn content_policy_says_what_the_instance_does() {
+        assert_eq!(super::content_policy(false), "prompt and tool content is hidden");
+        assert!(super::content_policy(true).contains("is shown"));
+        assert!(!super::content_policy(true).contains("hidden") && !super::content_policy(false).contains("never"));
     }
 
     #[test]

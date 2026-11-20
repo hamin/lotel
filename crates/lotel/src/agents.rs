@@ -41,7 +41,7 @@ use crate::{
         AttrCols, AttrOp, AttrSource, Bar, attr_field, canonical_of, empty_range_hint, range_field,
         service_field,
     },
-    ui::{cell, content_marker, short_ttl, thousands},
+    ui::{cell, content_marker, content_policy, short_ttl, thousands},
 };
 
 /// What a masked value becomes: the same placeholder
@@ -1292,11 +1292,12 @@ pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
         </p>
         <p class="meta">
             (format!(
-                "logs {} · traces {} · metrics {} · prompt and tool content is never shown; \
+                "logs {} · traces {} · metrics {} · {}; \
                  anything an agent sends is forgotten after {}/{}",
                 short_ttl(&cfg.ttl_logs),
                 short_ttl(&cfg.ttl_traces),
                 short_ttl(&cfg.ttl_metrics),
+                content_policy(shown),
                 short_ttl(&cfg.ttl_logs),
                 short_ttl(&cfg.ttl_traces),
             ))
