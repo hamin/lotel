@@ -16,6 +16,7 @@ on the defaults.
 | smoke | `just smoke` | 1m | any page that fails to render, ingest + caps + search end to end |
 | stress | `just stress` | 1m | behavior **under storm**: request failures, p95 blowups, panics, data loss |
 | soak | `just soak` | 11m | behavior **over time**: leaks, fd/thread growth, cap/TTL churn, wedges |
+| agent stress | `N=500 just agent-stress` | 1m | the agent pages over a full store: p95, query OOM, empty-on-error, live heap, caps |
 | tenants | `scripts/tenant-proof.sh` | 1m | per-tenant isolation: catalogs, tokens, TTLs, double-serve |
 | ASan | `cd ../capped/shell && GEN=ninja make asan` | 25m+ | memory safety of capped C++ (UAF, overflow, double-free) |
 
@@ -123,10 +124,57 @@ one keep-alive connection per process (like a real SDK) and a paced warmup
 | smoke / tenant-proof | 53 checks / all isolation gates |
 | capped ASan | 239 assertions, 3 files, all passed |
 
+## M-agents run record (2026-11-19, Apple M1 Max, 10 cores)
+
+`scripts/agent-stress.sh` replays the committed agent fixtures
+(`testdata/agent/`: one Claude Code + opencode capture, one Codex capture) N
+times. Each copy gets fresh session, trace, span and opencode run ids and has
+its timestamps spread back over the last two days, then the agent pages are
+timed against the full store (ports 18092/14330, `LOTEL_MAX_BYTES=256MB`,
+`LOTEL_MEMORY_LIMIT=1GB`, release binary). A page showing a query error box,
+or an empty session list over a full store, fails the gate.
+
+| gate | result |
+| --- | --- |
+| units / clippy | 190 green / clean |
+| smoke | all checks passed |
+| stress (2m, 8 readers, debug binary) | 0 failures / 2295, p50 182 ms, p95 1401 ms (budget 3000), 0 panics, 126,900 spans |
+| agent stress N=500 | 617 MB of OTLP JSON in 5 s; 117,003 logs, 2,000 replayed sessions |
+| — `/sessions` (default range / all) | p95 330 / 276 ms |
+| — one session's timeline | p95 293 ms |
+| — `/spend` (default range / all) | p95 92 / 81 ms |
+| — `/tools` (default range / all) | p95 102 / 89 ms |
+| — memory / caps | live heap 43 MB (RSS 1889 MB, allocator retention); largest table 18 MB of 256 MB |
+
+What the first N=500 run found, and what changed:
+
+- **The sessions rollup ran out of memory** at the 1 GB limit about three
+  runs in four (`Out of Memory Error … 957/953 MiB used`) with DuckDB's
+  default 10 threads; 8 threads or fewer always passed, so this was a
+  query at the edge of the limit, not a leak. The session id was read with
+  seven `json_valid` + `json_extract_string` pairs per attribute bag, so
+  every row's JSON was parsed fourteen times. `session_expr` now parses each
+  bag once (`json_extract_string` over the list of key paths, first
+  non-NULL), giving the same result (11,501 groups, 191,500 events, 56,000
+  spans on the probe store) at ~220 ms instead of ~480 ms or OOM.
+- **A failed query read as "No agent sessions."** `/sessions` and `/spend`
+  now show a "Couldn't load …" error box in place of the rows, and
+  agent-stress fails on it.
+- **A session's timeline was over budget** (p95 510 ms). It had rolled up
+  every session to fill its header row; it now rolls up only the session it
+  shows. The cross-agent session filter now parses each bag once
+  (`list_contains`), behind an exact substring pre-filter: an id made only
+  of `[A-Za-z0-9._:-]` appears verbatim in any JSON encoding, so a bag that
+  doesn't contain it as text is skipped before parsing, and any other id
+  skips the pre-filter (unit-tested with escaped ids). Running the
+  timeline's three reads in parallel was tried and made it slower
+  (0.5–0.8 s): each DuckDB query already uses every core.
+
 ## File map
 
 - `scripts/soak.sh` — watchdog + gates (self-contained; ports 18090/14328)
 - `scripts/stress.sh` — storm + latency/loss gates (ports 18091/14329)
+- `scripts/agent-stress.sh` — agent fixture replay + agent-page gates (ports 18092/14330)
 - `scripts/otlp-gen.py` — the traffic generator: correlated traces→logs→
   metrics, keep-alive, paced warmup (`--warmup M --for S --interval I --rate R`)
 - `../capped/Makefile` — `asan` target (Release + `-fsanitize=address`

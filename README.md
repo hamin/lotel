@@ -274,6 +274,7 @@ tarball's own binary as an ingest gate, so a release can't silently ship dead.
 | smoke | `just smoke` | every page renders, ingest + caps + search work end to end |
 | stress | `just stress` | 12 threads x 30s storm: zero failures, p95 under budget, no panics |
 | soak | `just soak` | 10 min sustained ingest: live heap bounded, no fd/thread growth, caps held |
+| agent stress | `N=500 just agent-stress` | agent pages over 500 replayed fixture copies: p95 under 500 ms, no query errors, live heap and caps held |
 | tenants | `scripts/tenant-proof.sh` | per-tenant isolation: catalogs, tokens, TTLs |
 
 Soak and stress are deliberately **local**, not CI: they run on their own

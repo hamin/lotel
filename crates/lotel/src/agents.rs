@@ -222,9 +222,18 @@ fn extract(col: &str) -> String {
 /// and Codex in the row's own attributes, opencode only in the resource bag),
 /// so a view that must cover all three reads both bags — see
 /// [`session_expr_bags`] and [`session_attr_cols`].
+///
+/// The bag is parsed once: `json_extract_string` over the list of paths, then
+/// the first non-NULL. Seven separate `json_valid`/extract pairs per bag
+/// parsed the same text fourteen times a row, and at a few hundred thousand
+/// spans that ran the sessions rollup out of a 1 GB memory limit on a
+/// ten-core machine (agent-stress at N=500).
 pub fn session_expr(col: &str) -> String {
-    let parts: Vec<String> = SESSION_KEYS.iter().map(|_| extract(col)).collect();
-    format!("COALESCE({})", parts.join(", "))
+    let marks = vec!["?"; SESSION_KEYS.len()].join(", ");
+    format!(
+        "(CASE WHEN json_valid({col}) THEN \
+         list_filter(json_extract_string({col}, [{marks}]), lambda x: x IS NOT NULL)[1] END)"
+    )
 }
 
 /// The `?` parameters [`session_expr`] leaves in its text.
@@ -247,34 +256,44 @@ pub fn session_expr_bags(cols: &AttrCols, alias: Option<&str>) -> (String, Vec<S
 }
 
 /// The session-id predicate for a page whose rows may carry the id under any
-/// agent's key: one `= ?` condition per (column, key) — every [`SESSION_KEYS`]
-/// spelling in `cols`' row and resource bags — to be joined with `OR` by the
-/// caller. That is what makes one `f=session.id=<sid>` link match Claude Code
+/// agent's key: one condition per bag — "any [`SESSION_KEYS`] spelling in
+/// this bag equals the id", each bag parsed once — for `cols`' row and
+/// resource bags, to be joined with `OR` by the caller. That is what makes one `f=session.id=<sid>` link match Claude Code
 /// (row bag), Codex (row bag) and opencode (resource bag) rather than only the
 /// agent whose spelling the page happened to guess.
 ///
 /// The body bag is not searched: no agent keeps a session id in a log body.
-/// Bind [`session_attr_params`], which returns the path then the id for each
-/// condition, matching the `?` order of the returned text.
+/// Bind [`session_attr_params`], which returns the id twice, every key path,
+/// then the id again for each condition, matching the `?` order of the text.
+///
+/// The `contains` guard is a cheap pre-filter in front of the JSON parse: an
+/// id made only of `[A-Za-z0-9._:-]` is written verbatim by any JSON encoder,
+/// so a bag whose text lacks it cannot hold it under any key. Any other id
+/// (one a JSON encoder might escape) skips the guard and is matched by the
+/// parse alone, so the pre-filter never changes what matches.
 pub fn session_attr_cols(cols: &AttrCols, alias: Option<&str>) -> Vec<String> {
+    let marks = vec!["?"; SESSION_KEYS.len()].join(", ");
     [cols.row, cols.resource]
         .iter()
-        .flat_map(|col| {
-            let col = extract(&qualify(col, alias));
-            SESSION_KEYS.iter().map(move |_| format!("({col} = ?)"))
+        .map(|col| {
+            let col = qualify(col, alias);
+            format!(
+                "((NOT regexp_full_match(?, '[A-Za-z0-9._:-]+') OR contains({col}, ?)) \
+                 AND (CASE WHEN json_valid({col}) THEN \
+                 list_contains(json_extract_string({col}, [{marks}]), ?) END))"
+            )
         })
         .collect()
 }
 
-/// The `?` parameters for [`session_attr_cols`]: the key path followed by the
-/// session id, per condition.
+/// The `?` parameters for [`session_attr_cols`]: per condition, the key paths
+/// followed by the session id.
 pub fn session_attr_params(cols: &AttrCols, sid: &str) -> Vec<String> {
-    let mut out = Vec::with_capacity(SESSION_KEYS.len() * 4);
+    let mut out = Vec::with_capacity((SESSION_KEYS.len() + 3) * 2);
     for _ in [cols.row, cols.resource] {
-        for key in SESSION_KEYS {
-            out.push(attr_path(key));
-            out.push(sid.to_string());
-        }
+        out.extend([sid.to_string(), sid.to_string()]);
+        out.extend(paths(SESSION_KEYS));
+        out.push(sid.to_string());
     }
     out
 }
@@ -1220,10 +1239,13 @@ pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
     let service = bar.get("service").to_string();
     let open = bar.get("session").to_string();
 
-    let mut rows = fetch_sessions(db, &bar, &service).unwrap_or_default();
     if !open.is_empty() {
-        rows.retain(|r| r.sid == open);
-        let head = rows.first().map(|r| session_cells(r, &bar, cfg));
+        // The header row only needs this session: narrow the rollup with the
+        // cross-agent session filter rather than rolling up every session.
+        let one = bar.href_add_filter("", &canonical_of(AttrSource::Row, AttrOp::Eq, "session.id", &open));
+        let narrowed = Bar::parse(one.split_once('?').map_or("", |(_, q)| q));
+        let rows = fetch_sessions(db, &narrowed, &service).unwrap_or_default();
+        let head = rows.iter().find(|r| r.sid == open).map(|r| session_cells(r, &bar, cfg));
         let (spans, total_ns) = crate::traces::fetch_session_waterfall(db, &open).unwrap_or_default();
         let span = bar.get("span");
         let selected = spans.iter().find(|s| s.span_id == span).cloned();
@@ -1247,10 +1269,12 @@ pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
         }
         .boxed());
     }
+    // A failed rollup says so; it never reads as "no sessions".
+    let (rows, load_err) = split_err(fetch_sessions(db, &bar, &service));
     // The logs/traces contract: empty under a window narrower than all
     // offers the same query at range=all; the setup pointer shows whenever
     // there is nothing to list.
-    let empty = rows.is_empty();
+    let empty = rows.is_empty() && load_err.is_none();
     let range_href =
         (empty && bar.range_is_narrow()).then(|| bar.href("/sessions", &[("range", "all")]));
     let services = agent_services(db);
@@ -1286,6 +1310,7 @@ pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
             <button type="submit">"Apply"</button>
         </form>
 
+        load_error(what: "sessions", err: load_err)
         <table>
             <thead>
                 <tr>
@@ -1313,6 +1338,26 @@ pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
         </table>
     }
     .boxed())
+}
+
+/// A page's rows, or none plus the error text when the query failed.
+fn split_err<T>(r: anyhow::Result<Vec<T>>) -> (Vec<T>, Option<String>) {
+    match r {
+        Ok(rows) => (rows, None),
+        Err(e) => (Vec::new(), Some(e.to_string())),
+    }
+}
+
+/// The red box a page shows in place of its rows when the query behind them
+/// failed (out of memory, a broken segment, …), so a failure never passes
+/// for an empty store.
+#[component]
+async fn load_error(cx: &Cx, what: &'static str, err: Option<String>) -> Result<impl View> {
+    Ok(view! {
+        if let Some(e) = &err {
+            <div class="qerr"><b>(format!("Couldn't load {what}"))</b><pre>(e.clone())</pre></div>
+        }
+    })
 }
 
 // ————————————————————————————————— spend (§3.3) —————————————————————————————————
@@ -1466,10 +1511,10 @@ pub(crate) async fn spend_page(cx: &Cx) -> Result<BoxView<'_>> {
     let bar = Bar::parse(uri(cx).query().unwrap_or(""));
     let service = bar.get("service").to_string();
 
-    let rows = fetch_spend(db, &bar, &service).unwrap_or_default();
+    let (rows, load_err) = split_err(fetch_spend(db, &bar, &service));
     let totals = spend_totals(&rows);
     let any_events = rows.iter().any(|r| r.from_events);
-    let empty = rows.is_empty();
+    let empty = rows.is_empty() && load_err.is_none();
     let range_href =
         (empty && bar.range_is_narrow()).then(|| bar.href("/spend", &[("range", "all")]));
     let cells: Vec<SpendCells> = rows.iter().map(|r| spend_cells(r, cfg)).collect();
@@ -1511,6 +1556,7 @@ pub(crate) async fn spend_page(cx: &Cx) -> Result<BoxView<'_>> {
             </p>
         }
 
+        load_error(what: "spend", err: load_err)
         <table>
             <thead>
                 <tr>
@@ -2057,15 +2103,10 @@ mod tests {
         let params = session_params();
         assert_eq!(params, paths(SESSION_KEYS));
         assert_eq!(sql.matches('?').count(), params.len());
-        assert!(sql.starts_with("COALESCE("));
-        assert_eq!(
-            sql.matches("json_extract_string").count(),
-            SESSION_KEYS.len()
-        );
-        assert_eq!(
-            sql.matches("json_valid(log_attributes)").count(),
-            SESSION_KEYS.len()
-        );
+        // one parse of the bag, not one per key (agent-stress OOM at N=500)
+        assert_eq!(sql.matches("json_extract_string").count(), 1);
+        assert_eq!(sql.matches("json_valid(log_attributes)").count(), 1);
+        assert!(sql.contains("lambda x: x IS NOT NULL)[1]"), "first non-NULL, in key order");
         // Claude Code's own id first, the captured Codex keys next, opencode's
         // run id last, so a row carrying several groups by the real id
         assert_eq!(SESSION_KEYS[0], "session.id");
@@ -2087,7 +2128,7 @@ mod tests {
     #[test]
     fn session_expr_bags_cover_the_row_and_the_resource_bag() {
         let (sql, params) = session_expr_bags(&METRIC_COLS, Some("mt"));
-        assert!(sql.starts_with("COALESCE(COALESCE("));
+        assert!(sql.starts_with("COALESCE((CASE WHEN json_valid(mt.metric_attributes)"));
         assert!(sql.contains("mt.metric_attributes") && sql.contains("mt.resource_attributes"));
         assert_eq!(params.len(), SESSION_KEYS.len() * 2);
         assert_eq!(sql.matches('?').count(), params.len());
@@ -2097,19 +2138,20 @@ mod tests {
     fn session_attr_conds_or_every_key_in_both_bags() {
         let conds = session_attr_cols(&LOG_COLS, Some("lg"));
         let params = session_attr_params(&LOG_COLS, "ses_1");
-        assert_eq!(conds.len(), SESSION_KEYS.len() * 2);
-        assert_eq!(params.len(), conds.len() * 2);
+        assert_eq!(conds.len(), 2, "one condition per bag");
+        assert_eq!(params.len(), (SESSION_KEYS.len() + 3) * 2);
         let sql = conds.join(" OR ");
         assert_eq!(sql.matches('?').count(), params.len());
-        assert!(conds.iter().all(|c| c.ends_with("= ?)")), "{:?}", conds[0]);
+        assert!(conds.iter().all(|c| c.contains("list_contains(") && c.contains("contains(lg.") && c.ends_with("?) END))")), "{:?}", conds[0]);
         assert!(sql.contains("lg.log_attributes") && sql.contains("lg.resource_attributes"));
         assert!(
             !sql.contains("body"),
             "no agent keeps a session id in a body"
         );
-        // path then id, per condition
-        assert_eq!(params[0], SESSION_ID_PATH);
-        assert_eq!(params[1], "ses_1");
+        // the guard's id twice, every key path, then the id, per bag
+        assert_eq!(&params[..2], ["ses_1", "ses_1"]);
+        assert_eq!(params[2], SESSION_ID_PATH);
+        assert_eq!(params[SESSION_KEYS.len() + 2], "ses_1");
         assert!(!sql.contains("ses_1"), "the id stays out of the text");
     }
 
@@ -2835,6 +2877,27 @@ pub(crate) mod db_tests {
         let rows = super::fetch_spend(&db, &Bar::default(), "").unwrap();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].from_events && rows[0].usd == "0.25" && rows[0].model == "m-large", "{rows:?}");
+        let _ = fs::remove_dir_all(&db.data_dir);
+    }
+
+    #[test]
+    fn session_prefilter_never_changes_what_matches() {
+        let db = temp_db("ag-prefilter");
+        seed_logs(&db);
+        // ids a JSON encoder escapes (a quote, a slash written as \/) skip
+        // the substring guard; the parse alone must still find them
+        db.with_conn(|conn| conn.execute_batch(
+            r#"INSERT INTO otel.main.otlp_logs
+                   (time_unix_nano, event_name, service_name, body, resource_attributes, log_attributes)
+               VALUES
+                   ('2026-11-17 11:00:00', '', 'x', '', '{}', '{"session.id":"we\"ird"}'),
+                   ('2026-11-17 11:00:01', '', 'x', '', '{}', '{"session.id":"a\/b"}'),
+                   ('2026-11-17 11:00:02', '', 'opencode', '', '{"opencode.run":"run.7:x"}', '{}');"#,
+        ).map_err(Into::into)).unwrap();
+        for (sid, want) in [("we\"ird", 1), ("a/b", 1), ("run.7:x", 1), ("ses_cc", 6), ("ses", 0)] {
+            let (sql, params) = session_events_query(&Bar::default(), sid);
+            assert_eq!(rows_of(sql, params, &db).len(), want, "session {sid:?}");
+        }
         let _ = fs::remove_dir_all(&db.data_dir);
     }
 

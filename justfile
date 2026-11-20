@@ -63,3 +63,9 @@ soak:
 #   STRESS_MINUTES=2 CONC=8 just stress
 stress:
     ./scripts/stress.sh
+
+# Agent stress (M-agents): replay the agent fixtures N times with fresh ids,
+# then gate the agent pages' p95, the live heap and the table caps.
+#   N=500 just agent-stress
+agent-stress:
+    ./scripts/agent-stress.sh
