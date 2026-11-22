@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M18 T3: build the release tarball, checksums, and prove it runs.
+# Build the release tarball, checksums, and prove it runs.
 #
 #   just dist   →   dist/lotel-<ver>-<platform>.tar.gz + dist/SHA256SUMS.txt
 #
@@ -54,9 +54,9 @@ cp -R licenses dist/stage/licenses
 say 'dist: cargo about generate THIRD-PARTY-LICENSES'
 cargo about generate about.hbs -o dist/stage/THIRD-PARTY-LICENSES
 
-# M18 T4: install.sh is a required tarball member (DoD #4) — no tarball
+# install.sh is a required tarball member — no tarball
 # without it.
-[ -f scripts/install.sh ] || die "scripts/install.sh missing — required tarball member (DoD #4)"
+[ -f scripts/install.sh ] || die "scripts/install.sh missing — required tarball member"
 cp scripts/install.sh dist/stage/install.sh
 
 # --- 4. Deterministic tar. Fixed mtime + pinned ownership + sorted member
@@ -69,8 +69,8 @@ rm -f "$TARBALL" dist/SHA256SUMS.txt
 gzip -n -9 -c dist/lotel-dist.tar > "$TARBALL"
 rm -f dist/lotel-dist.tar
 
-# Hash only this build's tarball (not the plan's dist/*.tar.gz glob) so a
-# stale tarball from an earlier version can never poison T4's sibling-file
+# Hash only this build's tarball (not a dist/*.tar.gz glob) so a
+# stale tarball from an earlier version can never poison install.sh's sibling-file
 # verification.
 shasum -a 256 "$TARBALL" > dist/SHA256SUMS.txt
 

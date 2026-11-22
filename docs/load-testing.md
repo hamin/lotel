@@ -1,4 +1,4 @@
-# Load testing (M17) — the local ladder, results, and the memory story
+# Load testing: the local ladder, results, and the memory story
 
 Everything here runs **on your machine, by design**. A 10-minute soak on a
 shared CI runner buys nothing a nightly laptop run doesn't, and the storm
@@ -46,7 +46,7 @@ Tunables (env, per run):
 
 **stress** — fails on *any* of: a failed request out of ~5.8k, p95 read
 latency over budget, a panic in the server log, or fewer spans in the store
-than the storm should have produced (125,820 survived the M17 run). Every
+than the storm should have produced (125,820 survived the 2026-11-10 run). Every
 endpoint is read concurrently *while* ingest floods, which is how it caught
 renderers indexing absent columns on query-failure rows — a class of 500
 that unit tests and smoke structurally cannot see.
@@ -112,7 +112,7 @@ one keep-alive connection per process (like a real SDK) and a paced warmup
 - If the watchdog aborts, `dump()` in the script persists stats to
   `watchdog.json` and the server log tail is printed at the end.
 
-## M17 run record (2026-11-10, M-series Mac, 24 GB)
+## Core run record (2026-11-10, Apple silicon Mac, 24 GB)
 
 | gate | result |
 | --- | --- |
@@ -123,7 +123,7 @@ one keep-alive connection per process (like a real SDK) and a paced warmup
 | smoke | 53 checks |
 | capped ASan | 239 assertions, 3 files, all passed |
 
-## M-agents run record (2026-11-19, Apple M1 Max, 10 cores)
+## Agent pages run record (2026-11-19, Apple M1 Max, 10 cores)
 
 `scripts/agent-stress.sh` replays the committed agent fixtures
 (`testdata/agent/`: one Claude Code + opencode capture, one Codex capture) N

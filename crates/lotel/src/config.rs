@@ -56,7 +56,7 @@ impl Config {
     }
 
     /// Stored text as a page may display it: through the shared render
-    /// redactor ([`crate::agents::redact_cell`], plan §5) unless the operator
+    /// redactor ([`crate::agents::redact_cell`]) unless the operator
     /// opted in with `LOTEL_AGENT_SHOW_CONTENT`. Nothing here touches the
     /// store — masking is a display-time decision, and the rows keep whatever
     /// the agent sent until the retention TTL forgets them.

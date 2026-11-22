@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Agent stress (M-agents T10, local by design): replay the committed agent
+# Agent stress (local by design): replay the committed agent
 # fixtures (testdata/agent/) N times — each copy with its own session ids,
 # trace/span ids and opencode run ids, and its timestamps spread back over
 # the last two days — then time the agent pages against the full store.

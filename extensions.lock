@@ -1,5 +1,5 @@
 # extensions.lock — pinned extension blobs fetched by scripts/fetch-extensions.sh
-# (M18 T5). The binary embeds these at compile time (include_bytes! in db.rs),
+# The binary embeds these at compile time (include_bytes! in db.rs),
 # so what ships is exactly what is listed here — verified by sha256 on every
 # fetch. Rotate deliberately: update the row, re-download, update the hash.
 #

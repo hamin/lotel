@@ -39,7 +39,7 @@ curl -fsS -X POST "http://127.0.0.1:14318/v1/logs" \
     -H 'Authorization: Bearer lotel-smoke-token-0123456789' \
     -H 'Content-Type: application/json' \
     --data "@testdata/logs-agents.json" >/dev/null
-# M-Agents T2 canaries (invented by this script, never copied from a real
+# Agent canaries (invented by this script, never copied from a real
 # capture): the shapes the agent CLIs send when their content gates are open —
 # a prompt attribute, opencode's `[message, "<command line>"]` body, a tool
 # input on a span, plus an email and a home path in free text.
@@ -147,7 +147,7 @@ check("facet active",   "/logs?severity=ERROR", "facet-row on")
 # Agent-style bodies: JSON renders as message + key=value chips (no JS), and
 # a row expands via <details>. Non-JSON rows stay verbatim.
 wait_for("agents array body", "/logs", "cli starting")
-# M-Agents T2 (§5) retires J1's expectation here. opencode's `cli starting`
+# Agent privacy changes the earlier expectation here. opencode's `cli starting`
 # payload is the one real prompt leak in the capture, so its whole element is
 # masked at render: the message stays, the fields decoded out of it (2.3.0,
 # args) no longer reach the page. The `f=body.version%3D2.3.0` check below
@@ -170,7 +170,7 @@ _, lfrag = get("/api/live?topic=logs&range=all")
 assert "data-key=" in lfrag, "tail fragment rows must carry the data-key too"
 print("PASS  data-key on tail fragment rows")
 
-# J2: the shared filter bar. Attribute filters ride `f` params; parse errors
+# The shared filter bar. Attribute filters ride `f` params; parse errors
 # show inline next to the input, never as a 500.
 check("bar attribute box",   "/logs", 'name="f"')
 check("f filter equals",     "/logs?f=tool_name%3Dbash", "claude_code.tool_result")
@@ -191,7 +191,7 @@ _, cb = get("/logs")
 assert 'class="kchip" href=' in cb, "attribute chips must be plain GET links"
 print("PASS  shared attribute filters (equals / resource / body / != / inline errors)")
 
-# M-Agents T2b: the Fields panel — what the bar's rows carry. A <details>
+# The Fields panel — what the bar's rows carry. A <details>
 # (no JS) under the facets: a name filter (ff), one closed line per key that
 # opens on its stats and top values, 20 keys a page (fp), empty keys hidden
 # unless fe=1. Each key line is itself a <details>, so the panel ends at its
@@ -229,7 +229,7 @@ _, fpb = get("/logs?fp=2")
 assert "fields" in fields_panel(fpb) and fpb.count("payment authorized") == lbp.count("payment authorized"), "fp pages the panel, never the table"
 print("PASS  fields panel: name filter, empty keys, paging leave the table alone")
 
-# J3: an empty list under a time range narrower than all shows a one-line
+# An empty list under a time range narrower than all shows a one-line
 # hint linking to the same query at range=all (plain <a>, works with JS off).
 _, hb = get("/logs?range=1h&f=tool_name%3Dnothing-matches-this")
 assert "over all time" in hb and "range=all" in unesc(hb), "empty + narrow range must offer all time"
@@ -271,13 +271,13 @@ check("waterfall tree", f"/traces?trace={trace}", "padding-left:")
 body = unesc(get(f"/traces?trace={trace}")[1])
 span = body.split("&span=")[1].split('"')[0]
 check("span detail",    f"/traces?trace={trace}&span={span}", "<pre>")
-# M18 T7: span names ride the own class namecell (logbody's overflow-wrap:
+# Span names ride the own class namecell (logbody's overflow-wrap:
 # anywhere starves the column to one char per line), and the status cell
 # always shows ok/unset/error — never blank.
 check("span name cell",   "/traces", 'class="namecell"')
 check("span status text", "/traces", ">unset<")
 
-# J2: the traces page shares the same filter bar; feed and p95 trend obey it.
+# The traces page shares the same filter bar; feed and p95 trend obey it.
 check("trace bar",        "/traces", 'name="mindur"')
 check("trace bar attrs",  "/traces", 'name="f"')
 _, mb = get("/traces?mindur=3500")
@@ -435,7 +435,7 @@ assert "querySelectorAll('details[data-key]')" in lpage, "live swap must track o
 assert "getSelection" in lpage, "live swap must skip while text inside the target is selected"
 print("PASS  logs live tail folded into LotelLive (open-details + selection guard)")
 
-# M-Agents T2 · privacy default (plan §5): prompt text, tool input/output and
+# Privacy default: prompt text, tool input/output and
 # the opencode command line are never displayed. The canaries this script
 # invented must be absent from the row list, the tail fragment, a filtered
 # list, the SQL console's result cells and Explore's result table — while the
@@ -476,7 +476,7 @@ assert CANARY_CMD not in sb and "tool_input" in sb and "[REDACTED]" in sb, "span
 assert "denied: /Users/jane" not in sb, "the status message loses the home path"
 print("PASS  waterfall + span card mask stored text, keep ids and keys")
 
-# M-Agents T3: /sessions lists one row per agent session across all three
+# /sessions lists one row per agent session across all three
 # agents, each keyed the way that agent carries it.
 for f, sig in (("claude-opencode-logs", "logs"), ("claude-opencode-traces", "traces"),
                ("claude-opencode-metrics-sum", "metrics"), ("codex-logs", "logs"),
@@ -526,7 +526,7 @@ assert rows_html.count("<tr") == 30, f"trace-scoped /logs lists the trace's 30 l
 assert "show all logs" in ltb and f'name="trace" value="{TR}"' in ltb, "scope is shown, clearable, and kept by the form"
 assert rows_html.count(f"/traces?trace={TR}") == 30, "each row links back to its stored trace"
 print("PASS  log <-> trace links: trace + span log counts, scoped /logs, links back")
-# M-Agents T4: /sessions?session= is the timeline — the session's spans as a
+# /sessions?session= is the timeline — the session's spans as a
 # waterfall, the span card on ?span=, and the event band with glance chips.
 _, tlb = get(f"/sessions?range=all&session={CC_SID}")
 tl = unesc(tlb)
@@ -541,7 +541,7 @@ for sid in (CX_SID, "3e122abc"):
     _, ob = get(f"/sessions?range=all&session={sid}")
     assert 'class="wf"' in ob, f"{sid}: other agents' sessions get a waterfall too"
 print("PASS  session timeline: waterfall, span card, event band, codex + opencode")
-# M-Agents T5: /spend — day x model x developer, and its total agrees with
+# /spend — day x model x developer, and its total agrees with
 # the same sum asked of the SQL console (same data, two paths).
 import re
 # ingest is buffered: wait until the cost metric points are queryable, so
@@ -563,7 +563,7 @@ assert "from events" not in spb, "the fixture day has cost metrics: no event fal
 page_total = spb.split('spend-total')[1].split("</b>")[0].split("$")[-1]
 assert page_total == console[0], f"/spend total ${page_total} == console ${console[0]}"
 print(f"PASS  spend: rows, and the page total ${page_total} matches the console")
-# M-Agents T6: /tools — the name from claude_code.tool joined to the outcome
+# /tools — the name from claude_code.tool joined to the outcome
 # on its execution span; the fixture's one failed Read call gets the badge.
 tb6 = unesc(wait_for("tools page lists Bash", "/tools?range=all", "<b>Bash</b>"))
 read_row = tb6.split("<b>Read</b>")[1].split("</tr>")[0]
@@ -582,7 +582,7 @@ assert "claude_code.tool" in sb6, "the spans link lists the tool's spans"
 _, lb6 = get("/logs?range=all&f=tool_name%3DBash")
 assert lb6.split('id="logrows"')[1].split("</tbody>")[0].count("<tr") > 0, "the logs link lists the tool's events"
 print("PASS  tools: joined name + outcome, p50/p95, failure badge")
-# M-Agents T7: /setup — this instance's endpoint + token in every block, the
+# /setup — this instance's endpoint + token in every block, the
 # Codex TOML parses, and no pane ever names an agent content gate.
 import html, tomllib
 GATES = ("OTEL_LOG_USER_PROMPTS", "OTEL_LOG_TOOL_DETAILS", "OTEL_LOG_TOOL_CONTENT", "OTEL_LOG_RAW_API_BODIES")
@@ -614,8 +614,8 @@ check("storage segs",   "/storage", "Segments")
 sys.exit(1 if fails else 0)
 PY
 
-# M-Agents T2: LOTEL_AGENT_SHOW_CONTENT=1 is the only way to see content, and
-# it announces itself (§5) — a lotel that displays prompts must never look
+# LOTEL_AGENT_SHOW_CONTENT=1 is the only way to see content, and
+# it announces itself — a lotel that displays prompts must never look
 # like the private default. Its own throwaway instance, store and ports.
 export LOTEL_ADDR=127.0.0.1:18081 LOTEL_OTLP_ADDR=127.0.0.1:14319 LOTEL_DATA_DIR="$TMP/store-show"
 export LOTEL_AGENT_SHOW_CONTENT=1

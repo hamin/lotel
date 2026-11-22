@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Soak (M17, local by design): run the binary under sustained OTLP ingest
+# Soak (local by design): run the binary under sustained OTLP ingest
 # while a watchdog polls every live surface the way a browser does, samples
 # process stats, and fails fast on the first sign of trouble — a panic, a
 # wedged endpoint, or unbounded RSS/fd growth. Caps and TTLs are set tight so
@@ -232,7 +232,7 @@ try:
 except Exception as e:
     check(False, "store caps queryable", str(e))
 
-# write amplification over the soak (fragments plan T10, informational):
+# write amplification over the soak (informational):
 # bytes_written / bytes from capped_tables('otel'), summed over all tables
 try:
     q = urllib.parse.quote("SELECT coalesce(sum(bytes), 0), coalesce(sum(bytes_written), 0) FROM capped_tables('otel')")

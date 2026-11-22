@@ -1,6 +1,4 @@
-// The agent views' query layer. Its redactor runs on every page today; the
-// session/spend/tool query builders still wait for their pages (T3–T7), so the
-// module keeps its allow until those land.
+// The agent views' query layer (pages, builders and the render redactor).
 #[allow(dead_code)]
 mod agents;
 mod api;
@@ -161,7 +159,7 @@ const DUCKDB_VERSION: &str = "2.0.0";
 /// Version the bundled capped blob reports through `capped_version()`.
 const CAPPED_VERSION: &str = "0.1.0";
 
-/// The one release stamp (M18 T1): printed by `lotel --version` and reused
+/// The one release stamp: printed by `lotel --version` and reused
 /// verbatim by the startup banner. The lotel version comes only from
 /// Cargo.toml; build.rs stamps the git SHA ("unknown" outside a checkout).
 fn version_line() -> String {
@@ -212,7 +210,7 @@ async fn main() -> anyhow::Result<()> {
         ing.listen_uri, ing.token
     );
     println!("lotel: UI on http://{}:{}", cfg.host, cfg.port);
-    // The opt-in announces itself (§5): a lotel that shows prompt text must
+    // The opt-in announces itself: a lotel that shows prompt text must
     // never look like the default one.
     if let Some(line) = agent_content_line(cfg.agent_show_content) {
         println!("{line}");
@@ -348,7 +346,7 @@ fn otlp_http_url(listen_uri: &str) -> String {
     format!("http://{}", listen_uri.trim_start_matches("otlp:"))
 }
 
-/// The startup banner line that makes the §5 content opt-in impossible to
+/// The startup banner line that makes the content opt-in impossible to
 /// miss: it exists only when `LOTEL_AGENT_SHOW_CONTENT` turned the render
 /// redactor off, so a lotel that shows prompt text never reads like the
 /// private default.
@@ -360,7 +358,7 @@ fn agent_content_line(show_content: bool) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    /// The DoD stamp: `lotel <ver> (<sha> · duckdb <v> · capped <v>)` — the
+    /// The release stamp: `lotel <ver> (<sha> · duckdb <v> · capped <v>)` — the
     /// same string --version prints and the banner leads with.
     #[test]
     fn version_line_has_the_release_stamp_shape() {
@@ -387,7 +385,7 @@ mod tests {
         assert!(version_mismatch("0.1.0", "").is_some(), "empty runtime is drift");
     }
 
-    /// The privacy banner (§5): masking is the silent default, and the only
+    /// The privacy banner: masking is the silent default, and the only
     /// line that exists is the one admitting content is being shown.
     #[test]
     fn the_banner_admits_content_only_when_it_is_shown() {

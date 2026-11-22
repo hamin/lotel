@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stress (M17, local by design): a short, sharp storm. Several generators
+# Stress (local by design): a short, sharp storm. Several generators
 # burst ingest while a fleet of readers hammers the surfaces that have to
 # survive concurrency — aggregate SQL, facets, BM25, live topics, the query
 # builder. Then we re-check every page and the store. Zero failures is the

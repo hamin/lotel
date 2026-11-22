@@ -172,7 +172,7 @@ impl Db {
     }
 
     /// Run a query and hand back column names + all values rendered as text.
-    /// Used by the M0/M1 status pages; signal views get typed queries in M2+.
+    /// Used by the status pages; signal views use typed queries.
     pub fn query_rows(&self, sql: &str) -> anyhow::Result<(Vec<String>, Vec<Vec<String>>)> {
         self.query_rows_with(sql, &[])
     }
@@ -301,7 +301,7 @@ mod tests {
 
     /// A failing query must surface as Err — not panic on column metadata for a
     /// statement that never executed, which took down every page behind the
-    /// shared connection (the M14 field bug).
+    /// shared connection (a bug seen in the field).
     #[test]
     fn failed_query_errors_without_poisoning_the_connection() {
         let db = temp_db("failed-query");
@@ -340,7 +340,7 @@ mod tests {
         let _ = fs::remove_dir_all(&db.data_dir);
     }
 
-    /// The J0 fix (attribute JSON paths as bound parameters) rests on this:
+    /// Binding attribute JSON paths as parameters rests on this:
     /// DuckDB accepts the json_extract path itself as a `?` parameter, so a
     /// hostile key never has to touch the SQL text.
     #[test]

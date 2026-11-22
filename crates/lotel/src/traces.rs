@@ -6,7 +6,7 @@
 //! p95 trend. The waterfall view of one trace is unfiltered by design.
 //!
 //! [`fetch_waterfall`] and [`fetch_session_waterfall`] are `pub(crate)` for
-//! the agent session timeline (crate::agents, T4), which lays a session's
+//! the agent session timeline (crate::agents), which lays a session's
 //! spans out with the same tree and the same bars.
 
 use topcoat::{
@@ -121,7 +121,7 @@ pub struct WaterfallSpan {
 
 /// The span as a page may display it: the columns that carry stored text
 /// (name, kind, status message, attributes) through the shared render redactor
-/// ([`crate::agents::redact_cell`], plan §5) unless the operator opted in.
+/// ([`crate::agents::redact_cell`]) unless the operator opted in.
 /// Ids, timings and positions are left alone — they build the waterfall, and
 /// they hold nothing an agent typed.
 pub(crate) fn span_for_display(s: &WaterfallSpan, cfg: &Config) -> WaterfallSpan {
@@ -298,7 +298,7 @@ mod tests {
         assert!(TraceFilters::from(Bar::default()).errors().is_empty());
     }
 
-    // ——— privacy: the render redactor on the page (§5) ——————————————————————
+    // ——— privacy: the render redactor on the page ——————————————————————
 
     /// A boot config differing only in the content knob.
     fn cfg(show_content: bool) -> Config {
@@ -679,7 +679,7 @@ async fn traces(cx: &Cx) -> Result<BoxView<'_>> {
     let range_current = f.bar.get("range").to_string();
     let raw_f = f.bar.raw_f();
     let errors = f.errors();
-    // The feed's two text columns go through the shared redactor (§5); the
+    // The feed's two text columns go through the shared redactor; the
     // ids, times and durations stay exactly as the store has them.
     let feed_rows: Vec<Vec<String>> =
         feed.1.iter().map(|r| feed_row_for_display(r, cfg)).collect();
@@ -794,7 +794,7 @@ async fn trace_view(
     trace_logs: u64,
     span_logs: u64,
 ) -> Result<impl View> {
-    // Stored text is masked on the way to the HTML (§5) — the bars, the labels
+    // Stored text is masked on the way to the HTML — the bars, the labels
     // and the attribute bag all show the redacted copy; the waterfall geometry
     // and the ids it links by are untouched.
     let cfg = context::<Config>(cx);
@@ -1021,7 +1021,7 @@ mod db_tests {
         );
     }
 
-    // ——— the session timeline (crate::agents, T4) reuses the same layout ———
+    // ——— the session timeline (crate::agents) reuses the same layout ———
 
     /// One Claude Code session: `interaction → tool → tool.execution` is one
     /// tree, so depth 0/1/2, in preorder, and the window is the session's own.

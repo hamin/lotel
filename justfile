@@ -14,13 +14,13 @@ fetch-extensions:
 build: fetch-extensions
     cargo build --release
 
-# M18 release engineering: build the tarball + SHA256SUMS under dist/ and
+# Release: build the tarball + SHA256SUMS under dist/ and
 # boot the tarball's own binary as an ingest sanity gate (refuses stubbed
 # extensions; see scripts/dist.sh).
 dist:
     ./scripts/dist.sh
 
-# M18 T5: build the container image (lotel:<ver>). The build context is the
+# Build the container image (lotel:<ver>). The build context is the
 # PARENT dir because capped builds from source in its own Docker stage;
 # lotel/Dockerfile.dockerignore keeps the context lean.
 docker:
@@ -47,19 +47,19 @@ smoke: fetch-extensions
     cargo build
     ./scripts/smoke.sh
 
-# Soak (M17, local by design): sustained ingest + UI polling with a watchdog
+# Soak (local by design): sustained ingest + UI polling with a watchdog
 # asserting no panics, no wedges, bounded RSS/fds, and caps held.
 #   SOAK_MINUTES=60 RATE=50 just soak
 soak:
     ./scripts/soak.sh
 
-# Stress (M17, local by design): burst ingest + concurrent read storm, then
+# Stress (local by design): burst ingest + concurrent read storm, then
 # re-verify every surface. Zero failures is the bar.
 #   STRESS_MINUTES=2 CONC=8 just stress
 stress:
     ./scripts/stress.sh
 
-# Agent stress (M-agents): replay the agent fixtures N times with fresh ids,
+# Agent stress: replay the agent fixtures N times with fresh ids,
 # then gate the agent pages' p95, the live heap and the table caps.
 #   N=500 just agent-stress
 agent-stress:

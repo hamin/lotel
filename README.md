@@ -41,14 +41,11 @@ just dist      # dist/lotel-0.1.0-<platform>.tar.gz + SHA256SUMS.txt (boot + ing
 scripts/install.sh --local dist/lotel-0.1.0-darwin-arm64.tar.gz
 ```
 
-> The one-line curl-pipe installer is wired but **not live until the repo is
-> public** — the default `LOTEL_REPO` is a placeholder:
->
-> ```sh
-> # PLACEHOLDER — available once the repo is public (M19). Until then use
-> # --local with a tarball from `just dist`, or build the image with just docker.
-> LOTEL_REPO=OWNER/lotel curl -fsSL https://raw.githubusercontent.com/OWNER/lotel/main/scripts/install.sh | sh
-> ```
+Once a release is published on GitHub, the installer can fetch it directly:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/hamin/lotel/main/scripts/install.sh | sh -s -- 0.1.0
+```
 
 ## Run
 
@@ -259,9 +256,11 @@ just stress             # 30s storm: concurrent ingest + every endpoint, p95 gat
 just soak               # 10 min sustained: watchdog over all pages, leak/fd/heap gates
 ```
 
-`just fetch-extensions` expects the sibling `capped` repo built
-(`cd ../capped && GEN=ninja make release`) and the community `otlp`
-extension installed for the pinned DuckDB version. Both are then
+`just fetch-extensions` downloads the pinned `otlp` and `fts` builds
+(`extensions.lock`, sha256-checked) and takes `capped` from a release build
+of [duckdb-capped](https://github.com/hamin/duckdb-capped) cloned next to
+this repo as `../capped` (`cd ../capped && GEN=ninja make release`), or from
+`$CAPPED_EXT`. All three are then
 `include_bytes!`-embedded, so the shipped binary needs nothing at runtime.
 `just dist` refuses to run against stubbed (zero-byte) blobs and boots the
 tarball's own binary as an ingest gate, so a release can't silently ship dead.

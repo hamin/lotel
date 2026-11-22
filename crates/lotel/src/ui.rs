@@ -284,17 +284,17 @@ pub(crate) async fn theme_panel(
 
 /// One cell of a DB row, rendered safely even when the row is a query-failure
 /// placeholder: those carry a single wide cell, not `arity` of them, and
-/// indexing past the end took pages down at 500 (the M17 stress finding).
+/// indexing past the end took pages down at 500 (found under stress testing).
 pub(crate) fn cell(row: &[String], i: usize) -> String {
     row.get(i).cloned().unwrap_or_default()
 }
 
-/// The sticker the agent pages show while content display is opted in (§5):
+/// The sticker the agent pages show while content display is opted in:
 /// `content: shown` by the page title, so a lotel that displays prompt text
 /// can never be read as the private default. While the redactor is on — the
 /// default — it renders nothing: there is nothing to admit.
 ///
-/// The agent pages (T3–T7) place it next to their titles.
+/// The agent pages place it next to their titles.
 #[component]
 pub(crate) async fn content_marker(cx: &Cx, shown: bool) -> Result<impl View> {
     Ok(view! {
@@ -367,7 +367,7 @@ mod tests {
     };
     use topcoat::{context::Cx, view::{ViewExt, view}};
 
-    /// The opt-in marker (§5): it says `content: shown` when content is being
+    /// The opt-in marker: it says `content: shown` when content is being
     /// displayed and stays out of the page otherwise.
     #[tokio::test]
     async fn content_marker_only_appears_when_content_is_shown() {

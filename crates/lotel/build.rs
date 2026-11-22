@@ -11,7 +11,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     // Stamp the commit this binary was built from so `lotel --version` can
-    // name it (M18 T1). `.git/HEAD` is two levels up from this manifest;
+    // name it. `.git/HEAD` is two levels up from this manifest;
     // outside a checkout (vendored builds) git fails and we fall back to
     // "unknown" rather than breaking the build.
     println!("cargo:rerun-if-changed=../../.git/HEAD");

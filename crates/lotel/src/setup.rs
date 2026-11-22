@@ -1,4 +1,4 @@
-//! `/setup` (plan §5): copy-paste blocks that point Claude Code and Codex at
+//! `/setup`: copy-paste blocks that point Claude Code and Codex at
 //! this lotel, with this instance's OTLP endpoint and ingest token filled in.
 //!
 //! Server-rendered, no JS: the three panes are `?tab=` links over one page.
@@ -6,7 +6,7 @@
 //! validated), falling back to the OTLP listen host; the port is always the
 //! OTLP listener's. The blocks never name the agents' content gates
 //! (`OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_TOOL_DETAILS`, …) — not even to say
-//! "leave these unset", since that advertises the knob (§5).
+//! "leave these unset", since that advertises the knob.
 
 use topcoat::{
     Result,
@@ -87,7 +87,7 @@ pub(crate) fn claude_block(base: &str, token: &str) -> String {
 
 /// Codex: the `[otel]` section for `~/.codex/config.toml`, as standard
 /// tables (an inline table split over lines isn't TOML 1.0). Metrics stay
-/// off until Codex's metric names are pinned (plan open question 7).
+/// off until Codex's metric names are pinned.
 pub(crate) fn codex_toml(base: &str, token: &str) -> String {
     format!(
         "[otel]\n\
@@ -139,7 +139,7 @@ async fn setup_pane(cx: &Cx, title: String, hint: String, block: String) -> Resu
     })
 }
 
-/// `/setup` (plan §5).
+/// `/setup`.
 #[page("/setup")]
 pub(crate) async fn setup_page(cx: &Cx) -> Result<impl View> {
     let ing = context::<Ingest>(cx);

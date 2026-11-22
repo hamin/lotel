@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(fnv1a("same"), fnv1a("same"));
     }
 
-    // ——— privacy: the render redactor on the page (§5) ——————————————————————
+    // ——— privacy: the render redactor on the page ——————————————————————
 
     /// A boot config that differs only in the content knob, so the render
     /// tests can say "masking on" / "masking off" without ten fields each.
@@ -244,7 +244,7 @@ mod tests {
         format!("{}|{chips:?}|{:?}|{:?}", v.text, v.body_json, v.attrs_json)
     }
 
-    /// The one real leak in the capture (§2), tested through the renderer the
+    /// The one real leak in the capture, tested through the renderer the
     /// page actually uses: the `cli starting` message stays so the row is
     /// still recognisable, and the command line behind it — the user's prompt
     /// included — reaches neither the text, the chips, nor the expansion.
@@ -297,8 +297,8 @@ mod tests {
         assert!(rendered(&shown).contains("private prompt"), "opt-in must show it");
     }
 
-    /// Plain-text bodies are not JSON, so only the two display masks apply
-    /// (§5): the address and the home directory go, the words stay.
+    /// Plain-text bodies are not JSON, so only the two display masks apply:
+    /// the address and the home directory go, the words stay.
     #[test]
     fn plain_text_rows_keep_their_words_and_lose_their_addresses() {
         let r = log_row("wrote app.rs for jane.doe@corp.example", "{}");
@@ -327,7 +327,7 @@ pub struct LogRow {
 impl LogRow {
     /// The row as a page may display it: the two columns that carry stored
     /// text (body, attributes) through the shared render redactor
-    /// ([`crate::agents::redact_cell`], plan §5) unless the operator opted in
+    /// ([`crate::agents::redact_cell`]) unless the operator opted in
     /// with `LOTEL_AGENT_SHOW_CONTENT`. Identity columns are untouched, so the
     /// row still links to its own trace, and the store itself is never
     /// rewritten — this is a display copy.
@@ -499,7 +499,7 @@ pub(crate) struct RankRow {
 /// Err means "not ready" (no indexed segments yet); the caller degrades to a
 /// note, never an error page — the LIKE list below still covers everything.
 /// The hit's body is the index's own copy, so it goes through the same
-/// display redactor the row list uses (§5) before it is rendered.
+/// display redactor the row list uses before it is rendered.
 pub(crate) fn fetch_ranked(db: &Db, f: &Bar, cfg: &Config) -> anyhow::Result<Vec<RankRow>> {
     let cutoff = f.cutoff();
     let service = f.get("service");
@@ -839,7 +839,7 @@ impl RowView {
 /// The table rows — also served bare by `/api/logs` for the tail poller.
 #[component]
 pub(crate) async fn log_rows(cx: &Cx, rows: Vec<LogRow>, bar: Bar) -> Result<impl View> {
-    // Content is hidden here, not in the store (§5): the page and the tail
+    // Content is hidden here, not in the store: the page and the tail
     // fragment render the same masked copy, so neither can leak what the
     // other one shows.
     let cfg = context::<Config>(cx);
@@ -1217,7 +1217,7 @@ pub(crate) mod db_tests {
 
     #[test]
     fn body_prefix_reads_object_bodies_and_decoded_array_payloads() {
-        // JSON object body (J1's message field)
+        // JSON object body (a message field)
         assert_eq!(
             bodies("obj", "f=body.message%3Dnothing"),
             Vec::<String>::new(),

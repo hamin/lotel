@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M18 T5: fetch the extension blobs the binary embeds at compile time
+# Fetch the extension blobs the binary embeds at compile time
 # (include_bytes! in db.rs) into crates/lotel/extensions/.
 #
 #   just fetch-extensions          # or ./scripts/fetch-extensions.sh

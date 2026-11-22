@@ -1,6 +1,6 @@
 //! Fields panel (T2b): what the bar's rows actually carry.
 //!
-//! Telemetry attribute bags differ per SDK and version (§2: Claude Code's
+//! Telemetry attribute bags differ per SDK and version (Claude Code's
 //! `cost_usd` on events, Codex's `conversation.id`, opencode's
 //! `opencode.run`), so the panel lists every key the filter bar can address
 //! in the page's columns — bare (the row's own bag), `resource.`, and
@@ -13,12 +13,12 @@
 //!   selection (same range, service, free text and `f` filters as the page's
 //!   table) are profiled, and the panel says so.
 //! * **Privacy first**: every bag goes through `Config::display` (the single
-//!   redaction path, §5) *before* a key or value is read from it, so a
+//!   redaction path) *before* a key or value is read from it, so a
 //!   `CONTENT_KEYS` value never leaves the store on this panel — the counts
 //!   and the key survive, the value reads `[REDACTED]`. Profiling therefore
 //!   walks the masked bags in Rust: extracting a single value SQL-side
-//!   would strip away the key context the redactor needs, and the J0 rule
-//!   stays satisfied a fortiori — no attribute key or value ever enters the
+//!   would strip away the key context the redactor needs, and the bind-everything
+//!   rule stays satisfied a fortiori — no attribute key or value ever enters the
 //!   SQL text, which only ever carries the bar's bound `?` parameters.
 
 use std::collections::HashMap;
@@ -265,7 +265,7 @@ fn profile_body(text: &str, cfg: &Config, aggs: &mut Aggs) {
     }
     // The `cli starting` shape is read from the raw row: its payload keys
     // are listed with their counts, but every payload value is content — the
-    // one real prompt leak in the capture (§2) — so the private default
+    // one real prompt leak in the capture — so the private default
     // lists each value as REDACTED. That is exactly the rule redact_cell
     // applies to the body whole, taken one level deeper; the opt-in shows
     // the values again.
@@ -873,7 +873,7 @@ mod tests {
         assert!(find(&p, "body.tool_input").is_some(), "content keys are listed too");
         let d = dump(&p);
         assert!(!d.contains("canary-command") && !d.contains("s3cr3t"), "payload stayed hidden: {d}");
-        // §5 opt-in: the operator sees what was sent
+        // content opt-in: the operator sees what was sent
         let shown = profile(vec![(r#"{"role":"cli"}"#, "{}", body)], true);
         assert_eq!(find(&shown, "body.cmd").unwrap().top[0].v, "canary-command-9b2");
     }
@@ -1096,7 +1096,7 @@ mod db_tests {
         let sn = find(&p, "resource.service.name").expect("resource bag under its prefix");
         assert_eq!((sn.rows, sn.pct), (201, 100));
 
-        // §2: ints and numeric strings — both read as numbers (owner review)
+        // ints and numeric strings both read as numbers
         let d = find(&p, "duration_ms").expect("mixed-type key");
         assert!(d.types.starts_with("number") && !d.types.contains("string"), "{}", d.types);
         assert!(d.numeric.is_some(), "the numbers get stats");

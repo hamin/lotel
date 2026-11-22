@@ -5,7 +5,7 @@
 //! together. The key prefix picks the column: a bare key reads the row's
 //! own attribute bag (`log_attributes` on logs, `span_attributes` on
 //! traces), `resource.` reads `resource_attributes`, and `body.` reads the
-//! parsed body (J1): a JSON object body directly, or the JSON payload
+//! parsed body: a JSON object body directly, or the JSON payload
 //! strings inside an `[message, "<payload>"]` array body.
 //!
 //! `!=` and `~` only ever consider rows that carry the key: a missing key
@@ -23,7 +23,7 @@
 //! A line that fails to parse is never a 500: it is skipped by the SQL and
 //! surfaced next to the input instead (see [`Bar::attr_errors`]).
 //!
-//! Safety model (J0): keys and values never reach the SQL text. The JSON
+//! Safety model: keys and values never reach the SQL text. The JSON
 //! path and the value both bind as `?` parameters, one `?` per path
 //! occurrence — see [`Bar::attr_conds`] for the exact `?` order.
 
@@ -475,7 +475,7 @@ impl Bar {
             if f.source == AttrSource::Body {
                 // The body as stored, plus — for `[message, "<payload>"]`
                 // arrays — each string element decoded exactly one level,
-                // the same fields J1's chips read. `?` order: path, path, value.
+                // the same fields the body chips read. `?` order: path, path, value.
                 conds.push(format!(
                     "(COALESCE(\
                        (CASE WHEN json_valid({col}) THEN json_extract_string({col}, ?) END),\

@@ -1,26 +1,26 @@
 //! The coding-agent views' query layer: Claude Code, OpenAI Codex and opencode
 //! telemetry read out of the six signal tables.
 //!
-//! SQL builders plus the shared render redactor (§5), and the first agent
-//! page: T3's `/sessions` list (§3.1). The timeline, spend, tools and setup
-//! pages (T4–T7) join it here.
+//! SQL builders plus the shared render redactor, and the first agent
+//! page, the `/sessions` list. The timeline, spend, tools and setup
+//! pages join it here.
 //!
 //! Three rules the whole module lives by:
 //!
 //! * **The shared filter model filters.** Every builder takes a [`Bar`] and
 //!   appends its `attr_conds_aliased` conditions, so an agent page filters
 //!   exactly like the logs and traces pages. Keys and values bind as `?`
-//!   parameters and never reach the SQL text (the J0 rule): builders write
+//!   parameters and never reach the SQL text (the bind-everything rule): builders write
 //!   through [`Sql`]/[`Where`], which append a `?` and its value together, and
 //!   the tests assert the two counts agree and that no typed text appears in
 //!   the statement.
-//! * **Measured data beats documented data** (§2). The event name rides in
+//! * **Measured data beats documented data**. The event name rides in
 //!   `log_attributes."event.name"` for *both* Claude Code (the OTLP
 //!   `event_name` column is empty on every row) and Codex (there it holds a
 //!   Rust source location), so [`event_name_expr`] reads the attribute first.
 //!   `success` is a string on events and a boolean on spans, so
 //!   [`success_expr`] compares text case-insensitively.
-//! * **Content is never displayed** (§5). [`redact_cell`] is the single
+//! * **Content is never displayed**. [`redact_cell`] is the single
 //!   redactor every renderer that can surface stored text runs, and
 //!   [`CONTENT_KEYS`] its single source of truth.
 
@@ -49,19 +49,19 @@ pub const REDACTED: &str = "[REDACTED]";
 
 /// The attribute keys whose values are prompt text, tool input/output, or
 /// anything else an agent may put its contents into — the shared redactor's
-/// single source of truth (§5). Everything under one of these keys becomes
+/// single source of truth. Everything under one of these keys becomes
 /// [`REDACTED`]; the numeric length/size companions (`prompt_length`,
 /// `tool_input_size_bytes`, …) are deliberately absent, because a count leaks
 /// nothing and it is the count the views chart.
 ///
-/// The list is the gated attributes the official docs document (§1): Claude
+/// The list is the gated attributes the official docs document: Claude
 /// Code's `prompt`/`prompt_text` (`OTEL_LOG_USER_PROMPTS`), `response`
 /// (`OTEL_LOG_ASSISTANT_RESPONSES`), `tool_input`/`tool_parameters`
 /// (`OTEL_LOG_TOOL_DETAILS`), the `tool.output` span event's
 /// `content`/`output`/`diff` (`OTEL_LOG_TOOL_CONTENT`), and the
 /// detailed-beta-only content attrs (`new_context`, `system_reminders`,
 /// `system_prompt_preview`, `user_system_prompt`, `response.model_output`) —
-/// plus the spellings §5 adds for the other agents and for commands.
+/// plus the spellings the other agents and commands use.
 pub const CONTENT_KEYS: &[&str] = &[
     // prompts and responses
     "prompt",
@@ -88,9 +88,9 @@ pub const CONTENT_KEYS: &[&str] = &[
 ];
 
 /// The keys a session id can ride in, in the order the views trust them:
-/// Claude Code's own `session.id` first (docs §1, present on every captured
+/// Claude Code's own `session.id` first (documented, and present on every captured
 /// row), then Codex's `conversation.id` (logs and its session spans) and
-/// `thread_id`/`turn.id` on spans (§2, the owner's capture), then opencode's
+/// `thread_id`/`turn.id` on spans (measured), then opencode's
 /// `opencode.run`.
 ///
 /// Not `thread.id`: on Codex spans it is the OS thread number ("9", "11"),
@@ -98,7 +98,7 @@ pub const CONTENT_KEYS: &[&str] = &[
 /// a "session" per worker thread.
 ///
 /// `opencode.run` is a *resource* attribute and the only per-run key opencode
-/// has (open question 2 ✅), so it comes last: a row carrying a real session
+/// has, so it comes last: a row carrying a real session
 /// id groups by that, and one carrying only a run id groups by the run.
 pub const SESSION_KEYS: &[&str] = &[
     "session.id",
@@ -111,28 +111,28 @@ pub const SESSION_KEYS: &[&str] = &[
 ];
 
 /// The metric label the cost and token rollups join on. Only Claude Code
-/// attaches `session.id` to its metric points (§2), so the metric side of the
+/// attaches `session.id` to its metric points, so the metric side of the
 /// session and spend rollups groups by this one key.
 pub const SESSION_ID_PATH: &str = r#"$."session.id""#;
 
-/// The event-name key and its JSON path (§2 diff 1).
+/// The event-name key and its JSON path.
 pub const EVENT_NAME_KEY: &str = "event.name";
 pub const EVENT_NAME_PATH: &str = r#"$."event.name""#;
 
 /// The tool-name spellings: Claude Code's `tool_name` on its tool spans and
 /// `tool_result`/`tool_decision` events, the `_safe` form the detailed beta
 /// sends alongside it, and Codex's `tool` label (INFERRED — the auth-401
-/// capture emitted no tool calls; open question 4).
+/// capture emitted no tool calls).
 pub const TOOL_NAME_KEYS: &[&str] = &["tool_name", "gen_ai.tool.name", "tool_name_safe", "tool"];
 
 /// The success key: the strings `"true"`/`"false"` on events, a boolean on
-/// spans (§2 diff 2).
+/// spans.
 pub const SUCCESS_KEY: &str = "success";
 
-/// The metric names `/spend` reads. The Claude Code names are measured (§2);
+/// The metric names `/spend` reads. The Claude Code names are measured;
 /// `codex.turn.token_usage` is INFERRED — the auth-401 capture emitted no
-/// metrics at all, so it must be pinned against the logged-in Codex run before
-/// T5's Codex column is trusted (open questions 3 and 7).
+/// metrics at all, so it must be pinned against a logged-in Codex run before
+/// the Codex column is trusted.
 /// Sum metric points that may be added up: deltas (temporality 1, what
 /// Claude Code sends by default) and points with no temporality recorded.
 /// A cumulative point (2) is a running total — summing those would count the
@@ -146,13 +146,13 @@ pub const SPEND_METRIC_NAMES: &[&str] = &[
     "codex.turn.token_usage", // INFERRED
 ];
 
-/// The event that backs the spend view's fallback branch (§3.3). The store
-/// keeps the un-prefixed name — the 12 event names measured in §2 carry no
+/// The event that backs the spend view's fallback branch. The store
+/// keeps the un-prefixed name — the 12 measured event names carry no
 /// `claude_code.` prefix.
 pub const API_REQUEST_EVENT: &str = "api_request";
 
 /// The spans `/tools` groups, and the Codex metric that stands in when no tool
-/// spans arrived. Both Codex names are INFERRED (open questions 4 and 7).
+/// spans arrived. Both Codex names are INFERRED.
 /// The span that names a tool call (Claude Code) — or names it and carries
 /// its outcome (Codex, INFERRED). See [`tool_health_query`].
 pub const TOOL_SPAN_NAMES: &[&str] = &["claude_code.tool", "codex.tool.call"];
@@ -296,7 +296,7 @@ pub fn session_attr_params(cols: &AttrCols, sid: &str) -> Vec<String> {
     out
 }
 
-/// The event name of a log row, **attribute-first** (§2 diff 1):
+/// The event name of a log row, **attribute-first**:
 /// `COALESCE(<event.name attr>, NULLIF(event_name, ''))`. Claude Code leaves
 /// the OTLP `event_name` column empty on every row and Codex puts a Rust
 /// source location in it, so trusting the column first would name nothing.
@@ -329,10 +329,9 @@ pub fn tool_name_params() -> Vec<String> {
 
 /// The `success` of a span or event as comparable text: `lower()` of the
 /// extracted value, defaulting to `'true'` when the row carries none (the
-/// Claude Code tool span documents no `success` attribute at all, §1).
+/// Claude Code tool span documents no `success` attribute at all).
 ///
-/// Events send `"true"`/`"false"` as strings and spans send booleans (§2 diff
-/// 2), which is why callers compare this text rather than a JSON type. Leaves
+/// Events send `"true"`/`"false"` as strings and spans send booleans, which is why callers compare this text rather than a JSON type. Leaves
 /// one `?` for the path; bind [`success_params`].
 pub fn success_expr(col: &str) -> String {
     format!("lower(COALESCE({}, 'true'))", extract(col))
@@ -344,8 +343,8 @@ pub fn success_params() -> Vec<String> {
 }
 
 /// A statement under construction. Text and parameters are appended together,
-/// so a `?` cannot be written without its value being bound: the J0 rule made
-/// structural. `finish`'s check can only fail if someone writes text around
+/// so a `?` cannot be written without its value being bound: the bind-everything
+/// rule made structural. `finish`'s check can only fail if someone writes text around
 /// the two, which is what its tests cover.
 #[derive(Default)]
 struct Sql {
@@ -494,7 +493,7 @@ impl Where {
         self
     }
 
-    /// The `service=…` first-class param (§3): empty means "every agent
+    /// The `service=…` first-class param: empty means "every agent
     /// service" and filters nothing — the seed's `cart`/`checkout` rows carry
     /// no session keys, so they drop out of the agent views on their own.
     /// The bar's time range on `time_col` — nothing when it is `all` (the
@@ -527,7 +526,7 @@ struct Branch<'a> {
     sig: &'a str,
 }
 
-/// `/sessions` (§3.1): one row per agent session — id, service, event count,
+/// `/sessions`: one row per agent session — id, service, event count,
 /// span count, first and last seen, and the cost/token rollups.
 ///
 /// Each arm of the `ev` union carries its own service and [`Bar`] conditions
@@ -606,7 +605,7 @@ pub fn sessions_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     sql.finish()
 }
 
-/// `/sessions?session=<id>`'s event band (§3.2): the session's log rows as
+/// `/sessions?session=<id>`'s event band: the session's log rows as
 /// event name + time + its own attribute bag, oldest first. The page renders
 /// the bag minus [`CONTENT_KEYS`], every cell through [`redact_cell`].
 pub fn session_events_query(bar: &Bar, sid: &str) -> (String, Vec<String>) {
@@ -636,7 +635,7 @@ pub fn session_events_query(bar: &Bar, sid: &str) -> (String, Vec<String>) {
 /// when it is showing the first N.
 pub(crate) const EVENTS_SHOWN: usize = 1000;
 
-/// `/spend` (§3.3): day × model × developer from the metric points — cost,
+/// `/spend`: day × model × developer from the metric points — cost,
 /// input/output/cache tokens, active seconds.
 pub fn spend_metrics_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     let mut sql = Sql::new();
@@ -676,7 +675,7 @@ pub fn spend_metrics_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     sql.finish()
 }
 
-/// `/spend`'s fallback branch (§3.3): the same day × model × developer totals
+/// `/spend`'s fallback branch: the same day × model × developer totals
 /// read off the `api_request` events, so a logs-only capture still shows cost.
 /// The page runs it for the days the metric branch left empty and badges them
 /// "from events".
@@ -712,10 +711,10 @@ pub fn spend_events_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     sql.finish()
 }
 
-/// `/tools` (§3.4): calls, failures and latency percentiles per tool, from
+/// `/tools`: calls, failures and latency percentiles per tool, from
 /// the tool spans.
 ///
-/// Measured on Claude Code (T1): a tool call is two spans. `claude_code.tool`
+/// Measured on Claude Code: a tool call is two spans. `claude_code.tool`
 /// carries the name (`tool_name` / `gen_ai.tool.name`) and its child
 /// `claude_code.tool.execution` carries the outcome (`success`) — and the
 /// execution time, without the wait for the user's approval. Both carry the
@@ -759,11 +758,10 @@ pub fn tool_health_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     sql.finish()
 }
 
-/// `/tools`' fallback (§3.4): the Codex tool counters, for when no tool spans
-/// arrived. INFERRED — the auth-401 capture emitted no metrics at all (open
-/// question 7). The histogram side (`codex.tool.call.duration_ms` quantiles
+/// `/tools`' fallback: the Codex tool counters, for when no tool spans
+/// arrived. INFERRED — the auth-401 capture emitted no metrics at all. The histogram side (`codex.tool.call.duration_ms` quantiles
 /// from `bucket_counts` + `explicit_bounds`) is deliberately not built here:
-/// nothing has emitted that metric yet, so T6 adds it once T0's logged-in Codex
+/// nothing has emitted that metric yet, so it waits until a logged-in Codex
 /// run pins the names.
 pub fn tool_metrics_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     let mut sql = Sql::new();
@@ -781,7 +779,7 @@ pub fn tool_metrics_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     sql.finish()
 }
 
-/// `/tools`' second block (§3.4): how often each tool's use was rejected,
+/// `/tools`' second block: how often each tool's use was rejected,
 /// counted from the `tool_decision` events.
 pub fn tool_decisions_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
     let mut sql = Sql::new();
@@ -813,7 +811,7 @@ pub fn tool_decisions_query(bar: &Bar, service: &str) -> (String, Vec<String>) {
 
 /// One row of `/sessions`: the typed, render-ready projection of
 /// [`sessions_query`]'s SELECT. The query's `first_seen` stays in SQL — the
-/// list only shows "last seen" (§3.1).
+/// list only shows "last seen".
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SessionRow {
     pub(crate) sid: String,
@@ -827,7 +825,7 @@ pub(crate) struct SessionRow {
 }
 
 /// Run [`sessions_query`] and project its rows. Values arrive still raw: the
-/// renderer runs every displayed cell through `Config::display` (§5).
+/// renderer runs every displayed cell through `Config::display`.
 pub(crate) fn fetch_sessions(db: &Db, bar: &Bar, service: &str) -> anyhow::Result<Vec<SessionRow>> {
     let (sql, params) = sessions_query(bar, service);
     let bind: Vec<&dyn duckdb::ToSql> = params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
@@ -874,7 +872,7 @@ fn num_cell(s: &str) -> String {
     }
 }
 
-/// The USD cell (§3.1: `.num`): a `$` prefix, blank when the session has no
+/// The USD cell (`.num`): a `$` prefix, blank when the session has no
 /// cost rollup.
 fn usd_cell(s: &str) -> String {
     match s.parse::<f64>() {
@@ -892,7 +890,7 @@ fn token_cell(s: &str) -> String {
     thousands(&num_cell(s))
 }
 
-/// The session id in its truncated mono form (§3.1): long ids show their
+/// The session id in its truncated mono form: long ids show their
 /// first 8 characters; the whole value stays in the link and the `title`.
 fn short_id(sid: &str) -> String {
     let chars: Vec<char> = sid.chars().collect();
@@ -903,7 +901,7 @@ fn short_id(sid: &str) -> String {
     }
 }
 
-/// Last seen as relative text (§3.1): `"42s ago"`, `"5m ago"`, `"3h ago"`,
+/// Last seen as relative text: `"42s ago"`, `"5m ago"`, `"3h ago"`,
 /// `"12d ago"`. The store keeps UTC wall time, so the comparison is against
 /// UTC now. Anything unparsable (an error placeholder, epoch junk) renders
 /// as stored.
@@ -925,12 +923,12 @@ fn ago(ts: &str) -> String {
     }
 }
 
-/// One `/sessions` row (§3.1): the truncated mono id linking to the
+/// One `/sessions` row: the truncated mono id linking to the
 /// session's timeline, a service badge, events, spans, USD, tokens in / out,
 /// last seen relative time, and a logs link pre-filtered to the session
 /// (`f=session.id=<sid>` via [`Bar::href_add_filter`]). Every stored cell
 /// goes through `Config::display` — a session id or service name is stored
-/// text like any other (§5). `cfg` rides as a prop, not from context, so the
+/// text like any other. `cfg` rides as a prop, not from context, so the
 /// render tests call this straight.
 #[derive(Clone, Debug)]
 pub(crate) struct SessionCells {
@@ -1017,7 +1015,7 @@ pub(crate) async fn sessions_empty_row(cx: &Cx, colspan: usize) -> Result<impl V
     })
 }
 
-// ————————————————————————————————— session timeline (§3.2) —————————————————————————————————
+// ————————————————————————————————— session timeline —————————————————————————————————
 
 /// Event-band chips worth a glance, in this order: what ran, what it cost,
 /// how it went. Everything else is in the row's expandable bag.
@@ -1028,7 +1026,7 @@ const EVENT_CHIP_KEYS: &[&str] = &[
 ];
 
 /// One event-band row, every displayed cell already through
-/// `Config::display` (§5).
+/// `Config::display`.
 #[derive(Clone, Debug)]
 pub(crate) struct EventCells {
     pub(crate) time: String,
@@ -1158,7 +1156,7 @@ pub(crate) async fn event_band(cx: &Cx, events: Vec<EventCells>) -> Result<impl 
     })
 }
 
-/// `/sessions?session=<id>` (§3.2): the session's header, its spans as one
+/// `/sessions?session=<id>`: the session's header, its spans as one
 /// waterfall (a tree per trace, one shared time window), the selected span's
 /// card, then the event band.
 #[component]
@@ -1223,12 +1221,12 @@ pub(crate) async fn session_timeline(
     })
 }
 
-/// `/sessions` (§3.1, §4): one row per agent session — Claude Code's
+/// `/sessions`: one row per agent session — Claude Code's
 /// `session.id`, Codex's `conversation.id`/`thread_id`, opencode's
 /// `opencode.run` — under the shared [`Bar`], with the retention line every
 /// agent page carries and the `content: shown` marker whenever the opt-in
-/// has it (§5). `?session=<sid>[&span=<id>]` opens that session's
-/// timeline instead ([`session_timeline`], §3.2).
+/// has it. `?session=<sid>[&span=<id>]` opens that session's
+/// timeline instead ([`session_timeline`]).
 #[page("/sessions")]
 pub(crate) async fn sessions_page(cx: &Cx) -> Result<BoxView<'_>> {
     let db = context::<Db>(cx);
@@ -1359,7 +1357,7 @@ async fn load_error(cx: &Cx, what: &'static str, err: Option<String>) -> Result<
     })
 }
 
-// ————————————————————————————————— spend (§3.3) —————————————————————————————————
+// ————————————————————————————————— spend —————————————————————————————————
 
 /// One `/spend` row: a day × model × developer total, still raw. `from_events`
 /// marks a day the metric branch had no cost for, read off the `api_request`
@@ -1377,7 +1375,7 @@ pub(crate) struct SpendRow {
     pub(crate) from_events: bool,
 }
 
-/// Both §3.3 branches, merged: every metric row, then the event rows for the
+/// Both spend branches, merged: every metric row, then the event rows for the
 /// days on which no metric row carries a cost (a logs-only capture, or a
 /// sender with metrics off). Newest day first, priciest first within a day.
 pub(crate) fn fetch_spend(db: &Db, bar: &Bar, service: &str) -> anyhow::Result<Vec<SpendRow>> {
@@ -1499,7 +1497,7 @@ async fn spend_row(cx: &Cx, c: SpendCells) -> Result<impl View> {
     })
 }
 
-/// `/spend` (§3.3): what the agents cost, by day × model × developer, from
+/// `/spend`: what the agents cost, by day × model × developer, from
 /// the cost/token/active-time metrics — and from the `api_request` events on
 /// days without them, badged "from events". A totals strip over the rows on
 /// show, under the shared [`Bar`].
@@ -1592,7 +1590,7 @@ pub(crate) async fn spend_page(cx: &Cx) -> Result<BoxView<'_>> {
     .boxed())
 }
 
-// ————————————————————————————————— tool health (§3.4) —————————————————————————————————
+// ————————————————————————————————— tool health —————————————————————————————————
 
 /// One `/tools` row as displayed. Latency is blank for the counter fallback,
 /// which has no durations.
@@ -1722,7 +1720,7 @@ async fn tool_row(cx: &Cx, c: ToolCells) -> Result<impl View> {
     })
 }
 
-/// `/tools` (§3.4): per tool, how often the agents called it, how often it
+/// `/tools`: per tool, how often the agents called it, how often it
 /// failed, how long it took (p50 / p95 / max execution time), and how often
 /// you said no to it — under the shared [`Bar`].
 #[page("/tools")]
@@ -1799,7 +1797,7 @@ pub(crate) async fn tools_page(cx: &Cx) -> Result<BoxView<'_>> {
 
 // ————————————————————————————————— privacy —————————————————————————————————
 
-/// The shared render redactor (§5): the single place stored text is scrubbed
+/// The shared render redactor: the single place stored text is scrubbed
 /// before it reaches a page, an attribute chip, an expanded bag or a console
 /// result cell.
 ///
@@ -1808,10 +1806,10 @@ pub(crate) async fn tools_page(cx: &Cx) -> Result<BoxView<'_>> {
 ///   contents go. A nested value goes with its key whole — a `tool_input`
 ///   object *is* the content, not a container to recurse into.
 /// * opencode's `["cli starting", "<payload>"]` body is the one real prompt
-///   leak in the capture (§2): element 0 (the message) stays, everything after
+///   leak in the capture: element 0 (the message) stays, everything after
 ///   it is the payload and becomes [`REDACTED`].
 /// * Text keeps its text, with the two display masks the fixture dump applies
-///   too (§5): emails become `[redacted-email@example.invalid]`, and a home
+///   too: emails become `[redacted-email@example.invalid]`, and a home
 ///   path (`$HOME`, `/Users/<name>`, `/home/<name>`) becomes `[redacted-path]`
 ///   up to its next separator.
 ///
@@ -1956,10 +1954,10 @@ fn mask_paths(s: &str) -> String {
 mod tests {
     use super::*;
 
-    // ——— privacy: the shared redactor (§5) ————————————————————————————————
+    // ——— privacy: the shared redactor ————————————————————————————————
 
     /// This task's Accept line: the list covers every gated attribute the
-    /// official docs document (§1), each named with the gate that turns it on.
+    /// official docs document, each named with the gate that turns it on.
     #[test]
     fn content_keys_cover_every_gated_attr_in_the_docs() {
         let gated: &[(&str, &str)] = &[
@@ -1983,7 +1981,7 @@ mod tests {
                 "{key} is gated by {gate}, so it must be redacted"
             );
         }
-        // the §5 spellings the other agents, the span events and commands add
+        // the spellings the other agents, the span events and commands add
         for key in [
             "user_prompt",
             "tool_output",
@@ -2093,7 +2091,7 @@ mod tests {
         assert_eq!(redact_cell("GET /api/users"), "GET /api/users");
     }
 
-    // ——— the shared expressions (§2, §3) ————————————————————————————————
+    // ——— the shared expressions ————————————————————————————————
 
     #[test]
     fn session_expr_coalesces_the_agent_keys_in_order() {
@@ -2160,7 +2158,7 @@ mod tests {
         let col = sql.find("NULLIF(lg.event_name").unwrap();
         assert!(
             attr < col,
-            "§2 diff 1: the column holds junk, the attr is truth"
+            "the column holds junk, the attr is truth"
         );
         assert!(sql.starts_with("COALESCE(") && sql.ends_with("NULLIF(lg.event_name, ''))"));
         assert_eq!(event_name_params(), vec![EVENT_NAME_PATH.to_string()]);
@@ -2174,7 +2172,7 @@ mod tests {
         let sql = tool_name_expr("span_attributes");
         assert_eq!(sql.matches('?').count(), tool_name_params().len());
         assert_eq!(tool_name_params(), paths(TOOL_NAME_KEYS));
-        // the string "true" on events and the boolean on spans (§2 diff 2)
+        // the string "true" on events and the boolean on spans
         // both become text, and a row with no key counts as a success
         let ok = success_expr("span_attributes");
         assert!(
@@ -2188,7 +2186,7 @@ mod tests {
 
     // ——— the SQL builders: Bar conds round-trip, text stays clean ————————
 
-    /// The J0 invariant every builder keeps: exactly one bound parameter per
+    /// The invariant every builder keeps: exactly one bound parameter per
     /// `?`, and none of what the user typed in the statement.
     fn assert_bound(sql: &str, params: &[String], user_text: &[&str]) {
         assert_eq!(
@@ -2319,7 +2317,7 @@ mod tests {
         assert!(params.contains(&TOOL_REJECT_DECISION.to_string()));
     }
 
-    // ——— /sessions render (T3) —————————————————————————————————————————————
+    // ——— /sessions render —————————————————————————————————————————————
 
     use topcoat::{context::Cx, view::{ViewExt, view}};
 
@@ -2352,7 +2350,7 @@ mod tests {
         }
     }
 
-    /// The empty state (T3 Accept): the list points a fresh user at /setup.
+    /// The empty state: the list points a fresh user at /setup.
     #[tokio::test]
     async fn sessions_empty_row_points_at_setup() {
         let cx = Cx::new();
@@ -2361,7 +2359,7 @@ mod tests {
         assert!(html.contains("href=\"/setup\""), "the empty state points at /setup: {html}");
     }
 
-    /// §3.1's row contract: truncated mono id linking to the timeline, a
+    /// The row contract: truncated mono id linking to the timeline, a
     /// pre-filtered logs link, badge, `.num` cells, relative last seen.
     #[tokio::test]
     async fn session_row_links_to_timeline_and_prefiltered_logs() {
@@ -2499,7 +2497,7 @@ mod tests {
 // ————————————————————————————— DB fixtures ————————————————————————————————
 // The agent views' promise in executable form: the SQL the builders emit runs
 // against the real store and groups the three agents' rows by the key each of
-// them actually carries (§2). The rows are synthetic, shaped like the measured
+// them actually carries. The rows are synthetic, shaped like the measured
 // capture — no captured prompt text, tool content or paths is in here.
 
 #[cfg(test)]
@@ -2512,7 +2510,7 @@ pub(crate) mod db_tests {
     use crate::logs::db_tests::temp_db;
     use std::fs;
 
-    /// The Claude Code rows §2 measured: the event name in the attributes with
+    /// The Claude Code rows as measured: the event name in the attributes with
     /// the OTLP `event_name` column left empty, `success` as a string,
     /// `session.id` on every row, and the Codex shape beside it — where
     /// `event_name` holds a Rust source location and the session key is
@@ -2568,7 +2566,7 @@ pub(crate) mod db_tests {
 
     /// Spans shaped like the capture: Claude Code's `interaction → tool →
     /// tool.execution` chain on one session (the tool span carries `tool_name`,
-    /// the execution span `success` — §1, §2), a Codex tool span on
+    /// the execution span `success`), a Codex tool span on
     /// `thread_id`, and opencode's spans keyed only by the resource run id,
     /// across two traces so the waterfall has more than one tree to lay out.
     pub(crate) fn seed_traces(db: &crate::db::Db) {
@@ -2923,7 +2921,7 @@ pub(crate) mod db_tests {
         );
 
         // the Codex row is named by its attribute, not by the Rust source
-        // location its OTLP `event_name` column holds (§2 diff 1)
+        // location its OTLP `event_name` column holds
         let (sql, params) = session_events_query(&Bar::default(), "conv_9");
         let rows = rows_of(sql, params, &db);
         assert_eq!(rows.len(), 1);
@@ -2931,7 +2929,7 @@ pub(crate) mod db_tests {
         assert!(!rows[0][0].contains("session_telemetry.rs"));
 
         // the event band reaches the timeline through the same redactor the
-        // pages will run every cell through (§5): the stored prompt is there,
+        // pages will run every cell through: the stored prompt is there,
         // the rendered cell is not
         let (sql, params) = session_events_query(&Bar::default(), "ses_cc");
         let attrs = rows_of(sql, params, &db)[0][2].clone();
@@ -3003,7 +3001,7 @@ pub(crate) mod db_tests {
                 "40.0".to_string(),
                 "7.0".to_string(),
             ]],
-            "a logs-only capture still shows cost (§3.3)"
+            "a logs-only capture still shows cost"
         );
         let _ = fs::remove_dir_all(&db.data_dir);
     }

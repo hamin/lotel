@@ -975,7 +975,7 @@ pub fn run(db: &Db, plan: &Plan) -> Outcome {
 
 /// The result grid's cells as they are displayed — the SQL console and the
 /// Explore events/breakdown tabs both render through here, so one rule covers
-/// every stored value the page can echo (§5): each cell goes through the shared
+/// every stored value the page can echo: each cell goes through the shared
 /// redactor unless the operator opted in with `LOTEL_AGENT_SHOW_CONTENT`.
 ///
 /// The drill link is built from the *displayed* text too: a masked cell whose
@@ -1099,7 +1099,7 @@ pub fn drill_url(state: &QueryState, col: &str, val: &str) -> String {
 /// Compute facet columns for the current dataset + filters: top values and
 /// (per column) count-distinct and, for numerics, min/max. One query/column.
 /// Facet labels and their drill links come from stored values, so they go
-/// through the same display redactor as the result cells (plan §5).
+/// through the same display redactor as the result cells.
 pub fn facets(db: &Db, state: &QueryState, cfg: &Config) -> Vec<Facet> {
     let ds = match dataset(&state.dataset) {
         Some(d) => d,
@@ -1711,7 +1711,7 @@ mod tests {
         let p = compile(&s);
         assert_eq!(p.error, None);
         // The key travels as a bound path parameter, never inlined into the
-        // SQL text (J0: inlining it let a single quote break out of the
+        // SQL text (inlining it once let a single quote break out of the
         // string literal).
         assert!(
             p.table_sql
@@ -1737,7 +1737,7 @@ mod tests {
 
     #[test]
     fn attribute_key_quote_is_bound_not_inlined() {
-        // J0: resolve_col used to inline '$."<key>"' escaping only ", so a
+        // resolve_col used to inline '$."<key>"' escaping only ", so a
         // key like x')||'y closed the SQL string literal and injected text
         // into the statement. The path must be a bound parameter instead:
         // no quote in a key can ever reach the SQL text.
@@ -1944,7 +1944,7 @@ mod tests {
         assert!(compile_events(&s).error.is_some());
     }
 
-    // ——— privacy: the console / Explore result cells (§5) ———————————————————
+    // ——— privacy: the console / Explore result cells ———————————————————
 
     /// The grid every result table renders through: a content value in any
     /// cell is masked, the placeholder keeps its key and shape, numbers and

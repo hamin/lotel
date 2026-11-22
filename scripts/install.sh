@@ -1,5 +1,5 @@
 #!/bin/sh
-# lotel installer (M18 T4) — POSIX sh, no bashisms: strangers curl-pipe this
+# lotel installer — POSIX sh, no bashisms: strangers curl-pipe this
 # with whatever /bin/sh they have.
 #
 #   install.sh --local <tarball> [--prefix DIR]
@@ -10,19 +10,18 @@
 #       --prefix never escalates: an unwritable DIR is an error, not a sudo.
 #
 #   install.sh <version> [--prefix DIR]        (GitHub Releases mode)
-#   install.sh                                 (no args: errors until M19)
 #       Downloads
-#       https://github.com/OWNER/lotel/releases/download/v<VER>/lotel-<VER>-<platform>.tar.gz
-#       OWNER/repo is configurable with LOTEL_REPO="owner/repo"; the default
-#       is a placeholder, so both no-args mode and an unconfigured repo error
-#       with "requires public repo — M19" and point at --local.
+#       https://github.com/hamin/lotel/releases/download/v<VER>/lotel-<VER>-<platform>.tar.gz
+#       and verifies it against that release's SHA256SUMS.txt. The repo is
+#       configurable with LOTEL_REPO="owner/repo". With no version it errors
+#       and points at the releases page.
 #
 # A checksum mismatch aborts before anything is extracted or written.
 set -eu
 
 name=lotel
 prog=${0##*/}
-repo=${LOTEL_REPO:-OWNER/lotel} # placeholder until the public repo exists (M19)
+repo=${LOTEL_REPO:-hamin/lotel}
 release_base=https://github.com/$repo/releases/download
 
 TMP=
@@ -36,10 +35,10 @@ usage() {
     cat <<'EOF'
 usage:
   install.sh --local <tarball> [--prefix DIR]   offline install from a release tarball
-  install.sh <version>   [--prefix DIR]         GitHub Releases (requires public repo — M19)
+  install.sh <version>   [--prefix DIR]         install a GitHub release, e.g. 0.1.0
 
 Environment:
-  LOTEL_REPO=owner/repo   which GitHub repo to install from (default: a placeholder)
+  LOTEL_REPO=owner/repo   which GitHub repo to install from (default: hamin/lotel)
 EOF
     exit "${1:-1}"
 }
@@ -183,21 +182,15 @@ if [ "$mode" = local ]; then
 else
     # --- GitHub Releases mode.
     if [ -z "$version" ]; then
-        die "installing from GitHub Releases requires a public repo — M19.
-     Until then, build the tarball with 'just dist' and run:
-       $prog --local dist/lotel-<version>-$plat.tar.gz
-     See --help."
+        die "give a version to install, e.g. '$prog 0.1.0'
+     (releases: https://github.com/$repo/releases), or build a tarball with
+     'just dist' and run: $prog --local dist/lotel-<version>-$plat.tar.gz"
     fi
     v=${version#v}
     case $v in
         '' | *[!0-9A-Za-z.+-]*) die "bad version: $version" ;;
     esac
     case $repo in
-        OWNER/lotel)
-            die "GitHub Releases mode requires a public repo — M19: LOTEL_REPO is
-     still the placeholder ($repo). Set LOTEL_REPO=owner/repo once the repo
-     exists; until then use --local ('just dist' builds the tarball)."
-            ;;
         */*/*) die "LOTEL_REPO must be owner/repo, got: $repo" ;;
         */*) ;;
         *) die "LOTEL_REPO must be owner/repo, got: $repo" ;;
@@ -233,7 +226,7 @@ else
     if mkdir -p "$prefix" 2>/dev/null && [ -w "$prefix" ]; then
         install_bin "$BIN" "$prefix"
     else
-        # DoD #4 fallback, default prefix only — --prefix never reaches sudo.
+        # sudo fallback, default prefix only — --prefix never reaches sudo.
         warn "cannot write $prefix — falling back to /usr/local/bin (sudo)"
         command -v sudo >/dev/null 2>&1 || die "no sudo available; pass --prefix DIR"
         sudo mkdir -p /usr/local/bin || die "could not create /usr/local/bin"
