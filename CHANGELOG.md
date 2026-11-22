@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-22
 
 First release: one static binary that ingests OpenTelemetry over HTTP into a
 capped DuckDB store and serves a server-rendered UI. Telemetry stays for as
@@ -22,6 +22,9 @@ long as you set, then is forgotten on schedule.
 - Read queries run on a pool of connections while ingest keeps its own
   writer; `LOTEL_MEMORY_LIMIT` (default 1 GB) and `LOTEL_THREADS` bound
   DuckDB.
+- A data directory keeps the retention it was created with. If
+  `LOTEL_TTL_*` or `LOTEL_MAX_BYTES` disagree with it, lotel warns at start
+  and uses the stored limits.
 
 ### UI
 
@@ -50,10 +53,15 @@ long as you set, then is forgotten on schedule.
 
 - `lotel --version` prints the version, git SHA and the DuckDB and capped
   versions.
-- Release tarball with checksums (`just dist`), a POSIX `install.sh`, and a
-  container image (`just docker`).
+- Prebuilt binaries for macOS (Apple silicon, Intel) and Linux (x86_64,
+  arm64) on GitHub Releases, with `SHA256SUMS.txt`.
+- Install with `curl -fsSL https://lotel.io/install.sh | sh`, Homebrew
+  (`brew install hamin/tap/lotel`), `cargo binstall lotel` or
+  `cargo install lotel`. A container image builds with `just docker`.
 - A failed query shows an error and leaves the server usable; it never takes
   the UI down.
 - Test ladder: unit tests, `just smoke`, and local stress, soak and agent
   stress runs (see [docs/load-testing.md](docs/load-testing.md)).
 - `scripts/otlp-gen.py`, a dependency-free OTLP traffic generator.
+
+[0.1.0]: https://github.com/hamin/lotel/releases/tag/v0.1.0
