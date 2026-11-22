@@ -3,7 +3,7 @@
 #
 #   just dist   →   dist/lotel-<ver>-<platform>.tar.gz + dist/SHA256SUMS.txt
 #
-# Two mandatory guards (docs/M18-release-plan.md "Risks"): build.rs stubs
+# Two mandatory guards: build.rs stubs
 # missing extension blobs with zero bytes, so a release built without real
 # blobs ingests nothing. Guard 1 refuses a stubbed tree; guard 2 boots the
 # *tarball's own binary* from a clean extract dir, POSTs testdata/logs.json,

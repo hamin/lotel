@@ -4,10 +4,3 @@ lotel-data/
 crates/lotel/extensions/
 .crimson/
 
-# generated bake-off artifacts — rebuild with python3 design/bakeoff/build_[abcd].py
-/design/bakeoff/a-uuxp/
-/design/bakeoff/c-rim/
-/design/bakeoff/d-lab/
-/design/bakeoff/b-hallmark/*.html
-/design/bakeoff/*/.hallmark/
-.hallmark/salt

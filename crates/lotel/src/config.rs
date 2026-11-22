@@ -22,7 +22,7 @@ pub struct Config {
     /// Ingest bearer token; generated at boot when unset.
     pub ingest_token: Option<String>,
     /// Show agent content — prompt text, tool input/output — verbatim instead
-    /// of masking it at render (`docs/M-agents-plan.md` §5). Off by default:
+    /// of masking it at render. Off by default:
     /// what an agent sent stays hidden unless the operator opts in, and then
     /// the banner and the page markers say so.
     pub agent_show_content: bool,

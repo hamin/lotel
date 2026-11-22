@@ -1,6 +1,5 @@
 //! The coding-agent views' query layer: Claude Code, OpenAI Codex and opencode
-//! telemetry read out of the six signal tables (`docs/M-agents-plan.md` §2 is
-//! what the store really holds, §3 what each view reads).
+//! telemetry read out of the six signal tables.
 //!
 //! SQL builders plus the shared render redactor (§5), and the first agent
 //! page: T3's `/sessions` list (§3.1). The timeline, spend, tools and setup
@@ -44,9 +43,8 @@ use crate::{
     ui::{cell, content_marker, content_policy, short_ttl, thousands},
 };
 
-/// What a masked value becomes: the same placeholder
-/// `scripts/agent-fixture.sh` writes when it dumps fixtures, so a redacted
-/// fixture and a redacted render read identically.
+/// What a masked value becomes: the same placeholder the committed agent
+/// fixtures use, so a redacted fixture and a redacted render read identically.
 pub const REDACTED: &str = "[REDACTED]";
 
 /// The attribute keys whose values are prompt text, tool input/output, or
@@ -1856,8 +1854,7 @@ fn mask_value(v: Value) -> Value {
 }
 
 /// The opencode marker that means "the next element is the command line,
-/// prompt included" (§2) — the same test `agent-fixture.sh` applies when it
-/// dumps a fixture, and the test the Fields panel applies to its payload.
+/// prompt included" — the test the Fields panel applies to its payload.
 pub(crate) fn is_cli_starting(head: &str) -> bool {
     head.trim().to_lowercase().starts_with("cli starting")
 }

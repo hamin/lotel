@@ -182,7 +182,7 @@ traces and sessions do). The fix belongs in the OTLP extension.
 Two DuckDB extensions, embedded into the binary at compile time and
 materialized to `<data>/extensions/` at boot:
 
-- [`capped`](https://github.com/hamin/duckdb-capped) (not public yet) provides
+- [`capped`](https://github.com/hamin/duckdb-capped) provides
   the storage layer: tables
   are sealed parquet segments plus one open segment, `WITH (time_col, ttl,
   max_bytes)` policies enforce retention at the segment level, and
@@ -275,7 +275,6 @@ tarball's own binary as an ingest gate, so a release can't silently ship dead.
 | stress | `just stress` | 12 threads x 30s storm: zero failures, p95 under budget, no panics |
 | soak | `just soak` | 10 min sustained ingest: live heap bounded, no fd/thread growth, caps held |
 | agent stress | `N=500 just agent-stress` | agent pages over 500 replayed fixture copies: p95 under 500 ms, no query errors, live heap and caps held |
-| tenants | `scripts/tenant-proof.sh` | per-tenant isolation: catalogs, tokens, TTLs |
 
 Soak and stress are deliberately **local**, not CI: they run on their own
 ports beside a dev server, and a 10-minute soak on a shared runner buys
@@ -283,9 +282,7 @@ nothing a nightly laptop run doesn't. The DuckDB/extension side has its own
 memory gate: `cd ../capped && GEN=ninja make asan` builds Release with
 AddressSanitizer and runs the whole sqllogictest suite inside it. Full
 reference — gates, tunables, results, and the macOS allocator investigation —
-in [`docs/load-testing.md`](docs/load-testing.md). The full release ladder run
-against the 0.1.0 binary, with commands and results, is the QA record in
-[`docs/release-checklist-0.1.0.md`](docs/release-checklist-0.1.0.md).
+in [`docs/load-testing.md`](docs/load-testing.md).
 
 One honest caveat, measured rather than guessed: on macOS, RSS after a
 traffic flood reads high (gigabytes) while the *live heap* is ~40 MB —
@@ -294,41 +291,13 @@ them back (verified with a C probe). That is allocator policy, not lotel
 holding data, so the soak gates the live heap (vmmap bytes-allocated) plus
 RSS drift, instead of pretending an RSS ceiling is meaningful there.
 
-## Multi-tenancy (hosted flavor)
+## Status
 
-The `otlp` extension keys each server by its write target (`IngestTargetKey`
-= catalog + schema) and enforces **one server per target**, with its own token
-and listen URI. That maps cleanly onto multi-tenancy without a custom
-receiver: **one tenant = one attached capped catalog + one `otlp_serve`
-instance**, and isolation is free.
-
-`scripts/tenant-proof.sh` proves this against the real extensions: two
-tenants in one process, each landing rows only in its own catalog, one
-tenant's token rejected (401) at the other's endpoint, and per-tenant TTLs
-(1 day vs 30 days) honored — plus the extension refusing a second server on a
-taken catalog.
-
-The hosted control plane then just needs to: mint a tenant (attach a capped
-catalog + start a serve with a fresh token/port), and route each tenant's
-token to its listener's port (a reverse proxy on OTLP/HTTP, or per-tenant
-endpoints). DuckDB is single-writer, so at high tenant counts you shard
-tenants across processes rather than running thousands of listeners in one.
-
-## Status & roadmap
-
-Shipped through M18: OTLP ingest → capped store, dashboard, logs explorer with
-live tail and facets + BM25, trace waterfall, metric charts, latency analytics
-(p95 trends, duration histogram — shipped, not "next"), service map with
-sparklines, storage view, theme/skin panel, the local test ladder (smoke /
-stress / soak / tenant-proof), the readable-body + shared-filter-bar Explore
-improvements, and the M18 release surface (`--version`, `just dist`,
-`install.sh`, `just docker`). M-agents added the agent pages (`/sessions` with
-per-session timelines, `/spend`, `/tools`, `/setup`), log/trace cross-links,
-render-time content masking and phone-width layouts.
-
-M19 (public release automation — git remote, GitHub Releases, CI matrix,
-signed macOS binaries), M20 (multi-tenant control plane) and the backlog are
-in [docs/roadmap.md](docs/roadmap.md).
+lotel 0.1.0 has OTLP ingest into a capped store, a dashboard, a logs explorer
+with live tail, facets and BM25 search, a trace waterfall, metric charts,
+latency analytics, a service map, a storage view, a theme panel, and the
+agent pages (`/sessions` with per-session timelines, `/spend`, `/tools`,
+`/setup`) with log and trace cross-links and render-time content masking.
 
 ## License
 
@@ -337,7 +306,6 @@ bundled third-party components: DuckDB, the embedded `otlp` and `fts`
 extensions (MIT), uPlot (MIT), the five UI fonts (SIL OFL 1.1, full texts
 under
 [`crates/lotel/assets/fonts/LICENSES/`](crates/lotel/assets/fonts/LICENSES/)),
-and [`capped`](https://github.com/hamin/duckdb-capped) (not public yet,
-Apache-2.0). The Rust crates compiled into the binary ship
+and [`capped`](https://github.com/hamin/duckdb-capped) (Apache-2.0). The Rust crates compiled into the binary ship
 their own licenses as `THIRD-PARTY-LICENSES` next to `LICENSE` in the tarball
 and image.

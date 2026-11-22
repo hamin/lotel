@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# M18 T5 — multi-stage release image for lotel (docs/M18-release-plan.md T5).
+# Multi-stage release image for lotel.
 #
 # Build from the PARENT directory — capped has no published release yet, so
 # its source tree must be visible in the build context:
@@ -73,7 +73,7 @@ COPY lotel/extensions.lock extensions.lock
 RUN CAPPED_EXT=/tmp/capped-blob/capped.duckdb_extension \
     ./scripts/fetch-extensions.sh
 COPY lotel/ ./
-# Stub gate (docs/M18-release-plan.md "Risks"): a zero-byte blob would build
+# Stub gate: a zero-byte blob would build
 # fine and ingest nothing. The fetch layer already refuses to leave stubs
 # behind; this is the belt before cargo runs.
 RUN set -eu; for b in capped otlp fts; do \

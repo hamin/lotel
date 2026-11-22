@@ -17,8 +17,7 @@ on the defaults.
 | stress | `just stress` | 1m | behavior **under storm**: request failures, p95 blowups, panics, data loss |
 | soak | `just soak` | 11m | behavior **over time**: leaks, fd/thread growth, cap/TTL churn, wedges |
 | agent stress | `N=500 just agent-stress` | 1m | the agent pages over a full store: p95, query OOM, empty-on-error, live heap, caps |
-| tenants | `scripts/tenant-proof.sh` | 1m | per-tenant isolation: catalogs, tokens, TTLs, double-serve |
-| ASan | `cd ../capped/shell && GEN=ninja make asan` | 25m+ | memory safety of capped C++ (UAF, overflow, double-free) |
+| ASan | `cd ../capped && GEN=ninja make asan` | 25m+ | memory safety of capped C++ (UAF, overflow, double-free) |
 
 ## How to run
 
@@ -121,7 +120,7 @@ one keep-alive connection per process (like a real SDK) and a paced warmup
 | stress | 0 failures / 5801, p50 57 ms, p95 766 ms, 0 panics, 125,820 spans |
 | soak 10m | all PASS — peak RSS 2628 MB, live heap 136 MB, fd 19→20, threads flat 57, caps held |
 | soak 3m (final tree) | all PASS — live heap 202 MB |
-| smoke / tenant-proof | 53 checks / all isolation gates |
+| smoke | 53 checks |
 | capped ASan | 239 assertions, 3 files, all passed |
 
 ## M-agents run record (2026-11-19, Apple M1 Max, 10 cores)

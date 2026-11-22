@@ -181,7 +181,7 @@ if [ "$mode" = local ]; then
     fi
     extract_tarball "$tarball"
 else
-    # --- GitHub Releases mode, wired for M19 (docs/M18-release-plan.md).
+    # --- GitHub Releases mode.
     if [ -z "$version" ]; then
         die "installing from GitHub Releases requires a public repo — M19.
      Until then, build the tarball with 'just dist' and run:
