@@ -422,7 +422,7 @@ details.fline[open] { padding-bottom: var(--space-xs); }
 .smlabel { font-family: var(--font-mono); font-variation-settings: var(--fv-mono); font-size: 11px; fill: var(--color-ink-2); paint-order: stroke; stroke: var(--color-paper-2); stroke-width: 4px; }
 .smlabel.err { fill: var(--color-bad-ink); }
 .sm-node {
-  position: absolute; display: flex; flex-direction: column; gap: var(--space-3xs); min-height: 92px; overflow: hidden;
+  position: absolute; display: flex; flex-direction: column; gap: var(--space-3xs); min-height: 110px; overflow: hidden;
   padding: var(--space-2xs) var(--space-xs); gap: var(--space-3xs); background: var(--color-paper); color: inherit; text-decoration: none;
   border: var(--card-line); border-radius: var(--r-ctl); box-shadow: var(--pop-s);
   transition: transform var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out);
@@ -574,6 +574,8 @@ details[open] > :not(summary) { animation: rise var(--dur-short) var(--ease-out)
 @keyframes live-in { from { background-color: var(--color-sel); } }
 h1[tabindex="-1"]:focus { outline: none; }
 
+.wfout { position: absolute; top: 2px; line-height: 18px; font-family: var(--font-mono); font-variation-settings: var(--fv-mono); font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; pointer-events: none; }
+
 
 "##;
 
@@ -600,7 +602,4 @@ pub(crate) const SCHEMES: &[(&str, &str)] =
 
 /// (value, label) per structural style; value is the data-style attribute.
 /// The settings panel's fourth axis.
-pub(crate) const STYLES: &[(&str, &str)] = &[
-    ("chunky", "chunky"),
-    ("crisp", "crisp"),
-];
+pub(crate) const STYLES: &[(&str, &str)] = &[("chunky", "chunky"), ("crisp", "crisp")];

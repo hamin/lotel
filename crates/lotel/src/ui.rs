@@ -130,6 +130,44 @@ pub(crate) fn short_ttl(ttl: &str) -> String {
 /// and facet counts ("445806" -> "445,806"). Anything that is not a plain
 /// integer (query-failure placeholders, decimals) passes through untouched.
 /// Table cells and the Explore grid never run through this.
+/// A long decimal trimmed for reading: `3389.319868` → `3389.3`,
+/// `4.73029375` → `4.73`, `0.000123456` → `0.000123`. Anything that is not a
+/// plain decimal with more than three fractional digits (integers, ids,
+/// error placeholders, `445.0`) comes back exactly as given, so this only
+/// ever changes what a reader sees, never a value a link or filter carries.
+pub(crate) fn tidy_decimal(s: &str) -> String {
+    let t = s.trim();
+    let frac = match t.split_once('.') {
+        Some((_, f)) => f,
+        None => return s.to_string(),
+    };
+    if frac.len() <= 3 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return s.to_string();
+    }
+    let x: f64 = match t.parse() {
+        Ok(v) => v,
+        Err(_) => return s.to_string(),
+    };
+    let a = x.abs();
+    let places = if a >= 100.0 {
+        1
+    } else if a >= 1.0 {
+        2
+    } else if a == 0.0 {
+        0
+    } else {
+        // three significant figures below one
+        (2 - a.log10().floor() as i32).clamp(3, 12) as usize
+    };
+    let out = format!("{x:.places$}");
+    let out = if out.contains('.') {
+        out.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        out
+    };
+    if out == "-0" { "0".to_string() } else { out }
+}
+
 pub(crate) fn thousands(s: &str) -> String {
     let (sign, digits) = match s.strip_prefix('-') {
         Some(rest) => ("-", rest),
@@ -363,7 +401,7 @@ pub(crate) fn sev_class(sev: &str) -> &'static str {
 mod tests {
     use super::{
         DEFAULT_SKIN, Skin, content_marker, panel_href, parse_skin, query_has_skin, sev_class,
-        short_ttl, skin_readout, thousands,
+        short_ttl, skin_readout, thousands, tidy_decimal,
     };
     use topcoat::{context::Cx, view::{ViewExt, view}};
 
@@ -417,6 +455,20 @@ mod tests {
         assert_eq!(thousands("1234567"), "1,234,567");
         assert_eq!(thousands("1000000000"), "1,000,000,000");
         assert_eq!(thousands("-445806"), "-445,806");
+    }
+
+    #[test]
+    fn tidy_decimal_rounds_only_long_decimals() {
+        assert_eq!(tidy_decimal("3389.319868"), "3389.3");
+        assert_eq!(tidy_decimal("3218.7262046999995"), "3218.7");
+        assert_eq!(tidy_decimal("4.73029375"), "4.73");
+        assert_eq!(tidy_decimal("0.000123456"), "0.000123");
+        assert_eq!(tidy_decimal("0.0010000"), "0.001");
+        assert_eq!(tidy_decimal("-12.34567"), "-12.35");
+        // left exactly as given
+        for s in ["1500", "445.0", "0.001", "213.773", "", "abc.defgh", "1e-7", "2026-11-17 10:00:00.123456", "0.0.12345"] {
+            assert_eq!(tidy_decimal(s), s, "{s} must be untouched");
+        }
     }
 
     #[test]

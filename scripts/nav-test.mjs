@@ -17,6 +17,7 @@ const PORT = 9333;
 const prof = mkdtempSync(join(tmpdir(), 'navtest-'));
 const chrome = spawn(CHROME, ['--headless', '--disable-gpu', `--remote-debugging-port=${PORT}`,
   `--user-data-dir=${prof}`, '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
+process.on('exit', () => { try { chrome.kill('SIGKILL'); } catch {} });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const check = (ok, label, detail = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + label + (detail ? ` — ${detail}` : '')); if (!ok) fails++; };
@@ -24,7 +25,7 @@ const check = (ok, label, detail = '') => { console.log((ok ? 'PASS ' : 'FAIL ')
 let ws, id = 0; const pending = new Map(); const errors = []; const requests = [];
 async function connect() {
   for (let i = 0; i < 50; i++) {
-    try { const r = await fetch(`http://127.0.0.1:${PORT}/json/list`); const l = await r.json(); const p = l.find((t) => t.type === 'page'); if (p) return p.webSocketDebuggerUrl; } catch {}
+    try { const r = await fetch(`http://127.0.0.1:${PORT}/json/list`); const l = await r.json(); const p = l.find((t) => t.type === 'page'); if (p) return p.webSocketDebuggerUrl; if (i > 10) await fetch(`http://127.0.0.1:${PORT}/json/new?about:blank`, { method: 'PUT' }).catch(() => {}); } catch {}
     await sleep(200);
   }
   throw new Error('chrome did not start');
@@ -121,12 +122,12 @@ const firstMetric = await ev(`(function(){var a=document.querySelector('main a[h
 if (firstMetric) {
   check(await until(`!!document.querySelector('.uplot, canvas')`, 10000), 'metric chart draws after an in-place swap', firstMetric);
 }
-const fresh = await (async () => { await send('Page.reload'); await until(`document.readyState==='complete'`); return ev(`document.documentElement.getAttribute('data-pal')`); })();
+const fresh = await (async () => { await send('Page.reload'); await sleep(800); await until(`document.readyState==='complete' && !!document.documentElement`); return ev(`document.documentElement.getAttribute('data-pal')`); })();
 check(fresh === 'riso', 'look survives a real reload (cookie set by the swapped request)', fresh);
 
 // 7. no JS errors anywhere
 check(errors.length === 0, 'no uncaught JS errors', errors.slice(0, 3).join(' | '));
 
-ws.close(); chrome.kill();
+ws.close(); chrome.kill('SIGKILL');
 console.log(fails ? `navtest: ${fails} failed` : 'navtest: all passed');
 process.exit(fails ? 1 : 0);

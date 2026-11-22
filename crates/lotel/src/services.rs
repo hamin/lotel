@@ -36,11 +36,21 @@ pub struct MapFilters {
     pub range: String,
 }
 
+/// A latency short enough for a 172px node: whole milliseconds from 100 ms
+/// up (`3389`), one decimal below (`4.7`).
+fn short_ms(ms: f64) -> String {
+    if ms >= 100.0 {
+        format!("{ms:.0}")
+    } else {
+        format!("{ms:.1}")
+    }
+}
+
 /// Pixel geometry for the layered layout.
 const COLX: f64 = 224.0;
-const ROWY: f64 = 96.0;
+const ROWY: f64 = 124.0;
 const NODE_W: f64 = 172.0;
-const NODE_H: f64 = 92.0;
+const NODE_H: f64 = 110.0;
 const PAD: f64 = 10.0;
 /// Max ranking passes — bounds the longest-path loop and caps runaway cycles.
 const MAX_PASSES: usize = 64;
@@ -261,8 +271,8 @@ pub(crate) fn build_live(db: &Db, range: &str) -> LiveInput {
                 ),
                 head_class: format!("svc-dot {}", service_class(&l.name)),
                 spans: spans.to_string(),
-                p50: format!("{p50_ms:.1}"),
-                p95: format!("{p95_ms:.1}"),
+                p50: short_ms(p50_ms),
+                p95: short_ms(p95_ms),
                 err_class,
                 err_text,
                 spark,
@@ -318,9 +328,10 @@ pub(crate) async fn sm_map(cx: &Cx, input: LiveInput) -> Result<impl View> {
                             </div>
                             <div class="sm-stats meta">
                                 <span class="seg">(n.spans)" spans"</span>
-                                <span class="seg">"p50 "(n.p50)" / p95 "(n.p95)" ms"</span>
+                                " · "
                                 <span class=(n.err_class)>(n.err_text)</span>
                             </div>
+                            <div class="sm-stats meta">"p50 "(n.p50)" · p95 "(n.p95)" ms"</div>
                             <div class="sm-spark">(Unescaped::new_unchecked(n.spark))</div>
                             <div class="sm-spark sm-lat">(Unescaped::new_unchecked(n.lat))</div>
                         </a>

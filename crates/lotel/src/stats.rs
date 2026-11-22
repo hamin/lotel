@@ -4,7 +4,7 @@
 //! a pure geometry helper, so both features stay JS-free and testable. The
 //! span `status_code = 2` (OTLP `STATUS_CODE_ERROR`) is the error signal.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::db::Db;
 
@@ -196,12 +196,20 @@ pub fn error_series(db: &Db, range: &str) -> (Vec<f64>, Vec<SvcSeries>) {
             r[3].parse().unwrap_or(0),
         ));
     }
+    // Every service's line runs over the same buckets, so the sparklines
+    // share a time axis; a bucket a service had no spans in reads 0%.
+    let keys: BTreeSet<String> = per.values().flatten().map(|p| p.0.clone()).collect();
     let mut series: Vec<SvcSeries> = per
         .into_iter()
         .map(|(service, pts)| {
             let total = pts.iter().map(|p| p.1).sum();
             let errs = pts.iter().map(|p| p.2).sum();
-            let rates = pts.iter().map(|p| rate(p.1, p.2)).collect();
+            let at: BTreeMap<&str, (i64, i64)> =
+                pts.iter().map(|p| (p.0.as_str(), (p.1, p.2))).collect();
+            let rates = keys
+                .iter()
+                .map(|k| at.get(k.as_str()).map(|&(t, e)| rate(t, e)).unwrap_or(0.0))
+                .collect();
             SvcSeries {
                 service,
                 rates,
@@ -220,7 +228,6 @@ pub fn error_series(db: &Db, range: &str) -> (Vec<f64>, Vec<SvcSeries>) {
     });
     (overall, series)
 }
-
 
 // ———————————————————————————————————————————— latency time series —————————
 
@@ -295,7 +302,7 @@ pub fn latency_series_where(
         w = since("start_time_unix_nano")
     );
     let grouped = db.query_rows_with(&svc_sql, &params).unwrap_or_default().1;
-    let mut per: BTreeMap<String, (Vec<f64>, i64)> = BTreeMap::new();
+    let mut per: BTreeMap<String, (BTreeMap<String, f64>, i64)> = BTreeMap::new();
     for r in grouped {
         if r.len() < 4 {
             continue;
@@ -305,16 +312,24 @@ pub fn latency_series_where(
         } else {
             r[0].clone()
         };
-        let Ok(p95) = r[2].parse::<f64>() else { continue };
+        let Ok(p95) = r[2].parse::<f64>() else {
+            continue;
+        };
         let e = per.entry(svc).or_default();
-        e.0.push(p95);
+        e.0.insert(r[1].clone(), p95);
         e.1 += r[3].parse().unwrap_or(0);
     }
+    // Same time axis for every service (see error_series); no spans in a
+    // bucket draws as 0.
+    let keys: BTreeSet<String> = per.values().flat_map(|(m, _)| m.keys().cloned()).collect();
     let mut series: Vec<SvcLatency> = per
         .into_iter()
-        .map(|(service, (p95s, total))| SvcLatency {
+        .map(|(service, (by_bucket, total))| SvcLatency {
             service,
-            p95s,
+            p95s: keys
+                .iter()
+                .map(|k| by_bucket.get(k).copied().unwrap_or(0.0))
+                .collect(),
             total,
         })
         .collect();

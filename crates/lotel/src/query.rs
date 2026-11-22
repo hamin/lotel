@@ -19,6 +19,7 @@ use topcoat::{
 
 use crate::config::Config;
 use crate::db::{Db, quote};
+use crate::ui::tidy_decimal;
 
 /// SQL divisor turning epoch nanoseconds into the epoch SECONDS (fractional,
 /// kept as f64) that uPlot's `time` x-scale expects. Shared by both chart
@@ -1294,6 +1295,18 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
         }
     });
 
+    // The builder's numbers read rounded (`p95 3389.3`, not `3389.319868`);
+    // drill links were built from the raw value above, so they still match.
+    // The SQL console shows exactly what DuckDB returned.
+    let cells: Vec<Vec<(String, Option<String>)>> = if sql_mode {
+        cells
+    } else {
+        cells
+            .into_iter()
+            .map(|row| row.into_iter().map(|(t, h)| (tidy_decimal(&t), h)).collect())
+            .collect()
+    };
+
     // Result tabs (builder only). Breakdown shows only when grouped.
     let tabs: Vec<(&'static str, &'static str, String, bool)> = if sql_mode {
         Vec::new()
@@ -1437,7 +1450,7 @@ async fn query(cx: &Cx) -> TcResult<BoxView<'_>> {
                                     for it in &f.items {
                                         <a class="fval" href=(it.href.clone())>
                                             <span class="fvbar" style=(format!("width:{}%", it.pct))></span>
-                                            <span class="fvlab">(short(&it.v, 42))</span>
+                                            <span class="fvlab">(short(&tidy_decimal(&it.v), 42))</span>
                                             <span class="fvcnt">(it.cnt.to_string())</span>
                                         </a>
                                     }

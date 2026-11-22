@@ -210,9 +210,17 @@ fn dist_label(b: i64) -> &'static str {
 mod tests {
     use super::{
         TraceFilters, WaterfallSpan, dist_label, feed_row_for_display, fmt_ms, kind_label,
-        service_class, span_for_display,
+        label_fits, outside_label_style, service_class, span_for_display,
     };
     use crate::{agents::REDACTED, config::Config, filters::Bar};
+
+    #[test]
+    fn narrow_bars_put_their_label_beside_them() {
+        assert!(label_fits(60.0, "258.76 s"), "a wide bar keeps its label inside");
+        assert!(!label_fits(0.4, "0.91 s"), "a sliver of a bar does not");
+        assert_eq!(outside_label_style(10.0, 0.5), "left:calc(10.500% + 6px)");
+        assert_eq!(outside_label_style(97.0, 1.0), "right:calc(3.000% + 6px)", "near the end it goes left");
+    }
 
     #[test]
     fn durations_format_humably() {
@@ -865,13 +873,37 @@ pub(crate) async fn waterfall(cx: &Cx, spans: Vec<WaterfallSpan>, total_ns: i64,
                             style=(format!("left:{}%;width:{}%", s.offset_pct, s.width_pct))
                             title=(format!("{} · {} · {}", s.span_id.clone(), s.kind.clone(), s.ms.clone()))
                         >
-                            (s.ms.clone())
+                            if label_fits(s.width_pct, &s.ms) {
+                                (s.ms.clone())
+                            }
                         </span>
+                        if !label_fits(s.width_pct, &s.ms) {
+                            <span class="wfout" style=(outside_label_style(s.offset_pct, s.width_pct))>(s.ms.clone())</span>
+                        }
                     </div>
                 </a>
             }
         </div>
     })
+}
+
+/// Does a duration label fit inside its bar? The track is only known in
+/// percent, so this assumes a track of roughly 640px (about 1.2% per
+/// character of the mono label, plus padding). A bar too narrow for its
+/// label gets it beside the bar instead of a clipped "2" inside it.
+fn label_fits(width_pct: f64, label: &str) -> bool {
+    width_pct >= label.chars().count() as f64 * 1.2 + 2.0
+}
+
+/// Where an outside label goes: just right of the bar, or just left of it
+/// when the bar ends near the right edge of the track.
+fn outside_label_style(offset_pct: f64, width_pct: f64) -> String {
+    let end = offset_pct + width_pct;
+    if end <= 80.0 {
+        format!("left:calc({end:.3}% + 6px)")
+    } else {
+        format!("right:calc({:.3}% + 6px)", 100.0 - offset_pct)
+    }
 }
 
 /// A JSON bag pretty-printed for a <pre>; anything else as it came.
