@@ -189,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let cfg = config::Config::from_env()?;
+    let mut cfg = config::Config::from_env()?;
     let db = Db::open(&cfg)?;
 
     // The stamp above is compile-time constants (--version must answer
@@ -204,6 +204,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let ing = ingest::start(&db, &cfg, &db.ext_dir)?;
+    // The UI shows the limits the store enforces, not what the env asked for.
+    match ingest::adopt_store_retention(&db, &mut cfg) {
+        Ok(warnings) => warnings.iter().for_each(|w| eprintln!("{w}")),
+        Err(e) => eprintln!("lotel: warning: could not read the store's retention limits: {e}"),
+    }
 
     println!("{}", version_line());
     println!("lotel: store {}", db.data_dir_display());

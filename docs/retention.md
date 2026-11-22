@@ -48,7 +48,7 @@ LOTEL_TTL_LOGS='1 day' LOTEL_TTL_TRACES='12 hours' LOTEL_MAX_BYTES=500MB lotel
 
 ### Policies are fixed when a table is created
 
-lotel creates its tables on the first start in a data directory and writes the policies into them. On later starts it does not change tables that already exist. If you change `LOTEL_TTL_*` or `LOTEL_MAX_BYTES` for an existing data directory, the stored tables keep their original policy.
+lotel creates its tables on the first start in a data directory and writes the policies into them. On later starts it does not change tables that already exist. If you change `LOTEL_TTL_*` or `LOTEL_MAX_BYTES` for an existing data directory, the stored tables keep their original policy, and lotel prints a warning at start naming each value it ignored.
 
 To apply new values, start lotel with a new data directory:
 
@@ -56,7 +56,7 @@ To apply new values, start lotel with a new data directory:
 LOTEL_DATA_DIR=lotel-data-1d LOTEL_TTL_LOGS='1 day' lotel
 ```
 
-The Storage page always shows the policy each table actually has. The retention stickers in the top bar show the values lotel was started with, so after a change on an existing store the two can differ.
+The Storage page, the stickers in the top bar and the "kept" notes on the agent pages all show the policy the tables actually have.
 
 ## The Storage page
 

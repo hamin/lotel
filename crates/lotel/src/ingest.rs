@@ -146,3 +146,90 @@ fn random_token() -> String {
         .expect("need entropy for the ingest token");
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+/// The limits the store actually enforces. capped fixes a table's policy when
+/// the table is created, so an existing data directory keeps its original
+/// limits whatever `LOTEL_TTL_*` / `LOTEL_MAX_BYTES` say now. This replaces the
+/// config's values with the tables' own (every "kept 7d" in the UI reads the
+/// config) and returns one warning per limit the environment asked to change.
+pub fn adopt_store_retention(db: &Db, cfg: &mut Config) -> anyhow::Result<Vec<String>> {
+    let (_, rows) = db.query_rows("SELECT table_name, ttl_us, max_bytes FROM capped_tables('otel')")?;
+    let find = |table: &str| rows.iter().find(|r| r.first().map(String::as_str) == Some(table));
+    let mut warnings = Vec::new();
+    let mut adopt = |what: &str, var: &str, table: &str, slot: &mut String| {
+        let Some(us) = find(table).and_then(|r| r.get(1)).and_then(|v| v.parse::<i64>().ok()) else {
+            return;
+        };
+        let actual = ttl_from_us(us);
+        if parse_ttl_us(slot).is_some_and(|want| want != us) {
+            warnings.push(format!(
+                "lotel: warning: {var}={slot} is ignored: this data directory keeps {what} for {actual}, \
+                 set when its tables were created. Use a new LOTEL_DATA_DIR to change it."
+            ));
+        }
+        *slot = actual;
+    };
+    adopt("logs", "LOTEL_TTL_LOGS", "otlp_logs", &mut cfg.ttl_logs);
+    adopt("traces", "LOTEL_TTL_TRACES", "otlp_traces", &mut cfg.ttl_traces);
+    adopt("metrics", "LOTEL_TTL_METRICS", "otlp_metrics_gauge", &mut cfg.ttl_metrics);
+    if let Some(bytes) = find("otlp_logs").and_then(|r| r.get(2)).and_then(|v| v.parse::<u64>().ok()) {
+        if parse_size(&cfg.max_bytes).is_some_and(|want| want != bytes) {
+            warnings.push(format!(
+                "lotel: warning: LOTEL_MAX_BYTES={} is ignored: this data directory caps each table at {bytes} bytes, \
+                 set when its tables were created. Use a new LOTEL_DATA_DIR to change it.",
+                cfg.max_bytes
+            ));
+        }
+        cfg.max_bytes = format!("{bytes}B");
+    }
+    Ok(warnings)
+}
+
+const US_PER: [(&str, i64); 4] = [("day", 86_400_000_000), ("hour", 3_600_000_000), ("minute", 60_000_000), ("second", 1_000_000)];
+
+/// "7 days" style text for a TTL in microseconds, in the largest whole unit.
+fn ttl_from_us(us: i64) -> String {
+    for (unit, n) in US_PER {
+        if us >= n && us % n == 0 {
+            let k = us / n;
+            return format!("{k} {unit}{}", if k == 1 { "" } else { "s" });
+        }
+    }
+    format!("{us} microseconds")
+}
+
+/// "<n> <unit>" with day/hour/minute/second (singular or plural) to
+/// microseconds; anything else is None (no comparison, no warning).
+fn parse_ttl_us(s: &str) -> Option<i64> {
+    let (n, unit) = s.trim().split_once(' ')?;
+    let n: i64 = n.trim().parse().ok()?;
+    let unit = unit.trim().trim_end_matches('s');
+    US_PER.iter().find(|(u, _)| *u == unit).map(|(_, per)| n * per)
+}
+
+/// "2GB" / "64MB" / "512KB" / "100B" (decimal units, as capped reads them).
+fn parse_size(s: &str) -> Option<u64> {
+    let t = s.trim().to_ascii_uppercase();
+    let (num, mult) = [("TB", 1_000_000_000_000u64), ("GB", 1_000_000_000), ("MB", 1_000_000), ("KB", 1_000), ("B", 1)]
+        .iter()
+        .find_map(|(suf, m)| t.strip_suffix(suf).map(|n| (n.trim().to_string(), *m)))?;
+    num.parse::<u64>().ok().map(|n| n * mult)
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    #[test]
+    fn ttl_text_round_trips_through_microseconds() {
+        assert_eq!(ttl_from_us(7 * 86_400_000_000), "7 days");
+        assert_eq!(ttl_from_us(86_400_000_000), "1 day");
+        assert_eq!(ttl_from_us(36 * 3_600_000_000), "36 hours");
+        assert_eq!(parse_ttl_us("7 days"), Some(7 * 86_400_000_000));
+        assert_eq!(parse_ttl_us("1 day"), Some(86_400_000_000));
+        assert_eq!(parse_ttl_us("a week"), None);
+        assert_eq!(parse_size("2GB"), Some(2_000_000_000));
+        assert_eq!(parse_size("64mb"), Some(64_000_000));
+        assert_eq!(parse_size("lots"), None);
+    }
+}
