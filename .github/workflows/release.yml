@@ -23,7 +23,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: macos-14          # darwin-arm64
+          - os: macos-15          # darwin-arm64
           - os: macos-15-intel    # darwin-x86_64
           - os: ubuntu-22.04      # linux-x86_64, glibc 2.35
           - os: ubuntu-22.04-arm  # linux-aarch64, glibc 2.35
