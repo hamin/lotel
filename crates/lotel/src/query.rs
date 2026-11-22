@@ -1523,7 +1523,12 @@ const QBLD_JS: &str = r#"
         w.appendChild(i); return w;
     }
 
-    function colOptions(d){ var o=[]; d.cols.forEach(function(c){ if(!c.is_attr) o.push([c.key,c.label]); o.push(['@'+c.key, c.label+(c.is_attr?' (attr)':'')]); }); return o; }
+    // Plain columns filter as themselves; only attribute maps take an
+    // '@col' entry (plus a key), since '@plain' names no map to look into.
+    function colOptions(d){ var o=[]; d.cols.forEach(function(c){ o.push(c.is_attr ? ['@'+c.key, c.label+' (attr)'] : [c.key, c.label]); }); return o; }
+
+    // '@log_attributes:event.name' -> ['@log_attributes', 'event.name'].
+    function splitRef(cref){ cref=cref||''; if(cref[0]!=='@') return [cref,'']; var i=cref.indexOf(':'); return i<0 ? [cref,''] : [cref.slice(0,i), cref.slice(i+1)]; }
 
     function colSelect(d, cur) {
         var s=document.createElement('select'); s.className='qcol';
@@ -1548,8 +1553,9 @@ const QBLD_JS: &str = r#"
 
     function filterRow(d, f) {
         var r=document.createElement('div'); r.className='qtoken';
-        var col=colSelect(d, f.col||'service_name');
-        var key=document.createElement('input'); key.className='qkey'; key.placeholder='attribute key';
+        var ref=splitRef(f.col||'service_name');
+        var col=colSelect(d, ref[0]);
+        var key=document.createElement('input'); key.className='qkey'; key.placeholder='attribute key'; key.value=ref[1];
         var op=document.createElement('select'); op.className='qop';
         L.operators.forEach(function(o){ var e=document.createElement('option'); e.value=o[0]; e.textContent=o[1]; op.appendChild(e); });
         op.value=f.op||'=';
@@ -1562,9 +1568,13 @@ const QBLD_JS: &str = r#"
 
     function groupRow(d, g) {
         var r=document.createElement('div'); r.className='qtoken';
-        var col=colSelect(d, g||d.cols[0].key);
+        var ref=splitRef(g||d.cols[0].key);
+        var col=colSelect(d, ref[0]);
+        var key=document.createElement('input'); key.className='qkey'; key.placeholder='attribute key'; key.value=ref[1];
+        var sync=function(){ key.style.display = col.value[0]==='@' ? '' : 'none'; };
+        col.onchange=sync; sync();
         var x=document.createElement('button'); x.className='qdel'; x.textContent='×'; x.onclick=function(){ r.remove(); };
-        r.appendChild(col); r.appendChild(x); r._kind='group'; return r;
+        r.appendChild(col); r.appendChild(key); r.appendChild(x); r._kind='group'; return r;
     }
 
     function colref(token) {
