@@ -2,8 +2,33 @@
 name = "lotel"
 version = "0.1.0"
 edition = "2024"
-description = "Local OpenTelemetry backend: OTLP ingest, capped DuckDB storage, Topcoat UI"
+description = "See what your coding agents did: one binary that takes OpenTelemetry, stores it in DuckDB and forgets it on schedule"
 license = "Apache-2.0"
+repository = "https://github.com/hamin/lotel"
+homepage = "https://lotel.io"
+documentation = "https://lotel.io/docs"
+readme = "../../README.md"
+keywords = ["opentelemetry", "otlp", "observability", "duckdb", "claude-code"]
+categories = ["development-tools", "command-line-utilities"]
+# Extension blobs are fetched by build.rs from extensions.lock, never packaged.
+exclude = ["extensions/"]
+
+# `cargo binstall lotel` downloads the release tarball instead of compiling.
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+bin-dir = "bin/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/lotel-{ version }-darwin-arm64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/lotel-{ version }-darwin-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/lotel-{ version }-linux-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/lotel-{ version }-linux-aarch64.tar.gz"
 
 [dependencies]
 topcoat = { version = "0.12", features = ["tailwind"] }
@@ -15,3 +40,7 @@ anyhow = "1"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[build-dependencies]
+sha2 = "0.10"
+flate2 = "1"

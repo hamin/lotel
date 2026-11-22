@@ -24,13 +24,13 @@ use crate::config::Config;
 /// Materialized at compile time so one binary ships the storage layer.
 /// `just fetch-extensions` refreshes these from the capped shell build.
 const CAPPED_EXTENSION: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/extensions/capped.duckdb_extension"));
+    include_bytes!(concat!(env!("OUT_DIR"), "/capped.duckdb_extension"));
 
 /// BM25 full-text indexes over sealed segments (capped_fts). Embedded so
 /// search works on a machine with no DuckDB extension cache; capped's own
 /// sidecar build LOADs fts and finds this one already loaded.
 const FTS_EXTENSION: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/extensions/fts.duckdb_extension"));
+    include_bytes!(concat!(env!("OUT_DIR"), "/fts.duckdb_extension"));
 
 /// SQL string literal with single quotes escaped.
 pub(crate) fn quote(s: &str) -> String {

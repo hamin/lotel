@@ -9,12 +9,13 @@
 #       falling back to /usr/local/bin via sudo when it isn't writable).
 #       --prefix never escalates: an unwritable DIR is an error, not a sudo.
 #
-#   install.sh <version> [--prefix DIR]        (GitHub Releases mode)
+#   install.sh [<version>] [--prefix DIR]      (GitHub Releases mode)
 #       Downloads
 #       https://github.com/hamin/lotel/releases/download/v<VER>/lotel-<VER>-<platform>.tar.gz
 #       and verifies it against that release's SHA256SUMS.txt. The repo is
-#       configurable with LOTEL_REPO="owner/repo". With no version it errors
-#       and points at the releases page.
+#       configurable with LOTEL_REPO="owner/repo". With no version it
+#       installs the latest release:
+#           curl -fsSL https://lotel.io/install.sh | sh
 #
 # A checksum mismatch aborts before anything is extracted or written.
 set -eu
@@ -35,7 +36,7 @@ usage() {
     cat <<'EOF'
 usage:
   install.sh --local <tarball> [--prefix DIR]   offline install from a release tarball
-  install.sh <version>   [--prefix DIR]         install a GitHub release, e.g. 0.1.0
+  install.sh [<version>] [--prefix DIR]         install a GitHub release (default: the latest)
 
 Environment:
   LOTEL_REPO=owner/repo   which GitHub repo to install from (default: hamin/lotel)
@@ -182,9 +183,14 @@ if [ "$mode" = local ]; then
 else
     # --- GitHub Releases mode.
     if [ -z "$version" ]; then
-        die "give a version to install, e.g. '$prog 0.1.0'
-     (releases: https://github.com/$repo/releases), or build a tarball with
-     'just dist' and run: $prog --local dist/lotel-<version>-$plat.tar.gz"
+        TMP=$(mktemp -d "${TMPDIR:-/tmp}/lotel-install.XXXXXX") || die "mktemp -d failed"
+        fetch "https://api.github.com/repos/$repo/releases/latest" "$TMP/latest.json" ||
+            die "could not look up the latest release of $repo; pass a version, e.g. '$prog 0.1.0'"
+        version=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/latest.json" | head -n 1)
+        [ -n "$version" ] || die "no published release found in $repo"
+        rm -rf "$TMP"
+        TMP=
+        say "install: latest release is $version"
     fi
     v=${version#v}
     case $v in
@@ -200,11 +206,9 @@ else
     url="$release_base/v$v/$file"
     say "install: downloading $url"
     fetch "$url" "$TMP/$file" || die "could not download $url (does release v$v exist in $repo?)"
-    if fetch "$release_base/v$v/SHA256SUMS.txt" "$TMP/SHA256SUMS.txt" 2>/dev/null; then
-        verify_against "$TMP/$file" "$TMP/SHA256SUMS.txt"
-    else
-        warn "release has no SHA256SUMS.txt asset — installing unverified"
-    fi
+    fetch "$release_base/v$v/SHA256SUMS.txt" "$TMP/SHA256SUMS.txt" 2>/dev/null ||
+        die "release v$v has no SHA256SUMS.txt asset; refusing to install unverified"
+    verify_against "$TMP/$file" "$TMP/SHA256SUMS.txt"
     extract_tarball "$TMP/$file"
 fi
 

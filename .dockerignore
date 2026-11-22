@@ -1,0 +1,11 @@
+# Build context for the Dockerfile: lotel's source only.
+target/
+dist/
+lotel-data/
+**/node_modules/
+# host-fetched extension blobs (e.g. macOS): the image fetches its own
+crates/lotel/extensions/
+# local-only files
+local.just
+.hallmark/
+design/bakeoff/

@@ -1,0 +1,36 @@
+# extensions.lock: pinned extension blobs, fetched by scripts/fetch-extensions.sh
+# and, when they are missing, by build.rs (e.g. `cargo install lotel`)
+# The binary embeds these at compile time (include_bytes! in db.rs),
+# so what ships is exactly what is listed here — verified by sha256 on every
+# fetch. Rotate deliberately: update the row, re-download, update the hash.
+#
+# Format (whitespace-separated, one row per extension × platform):
+#   <extension> <platform> <sha256-of-uncompressed-blob> <url>
+# Lines starting with # and blank lines are ignored. $CAPPED_EXT, when set,
+# overrides the capped row with a local blob (for working on capped itself).
+#
+# sha256 is taken AFTER gunzip — the registry serves gzips; the uncompressed
+# bytes are what the binary embeds and what the hash protects.
+#
+# Hosts: fts is a core extension (extensions.duckdb.org); otlp is a community
+# extension (community-extensions.duckdb.org), the same paths the duckdb CLI's
+# `INSTALL ... FROM community` resolves to. capped comes from its own GitHub
+# release until it is in the community registry.
+
+duckdb_version v2.0.0
+
+otlp   osx_arm64    6ad3cd45cdef14c5d0095ade5a6f667268eb3cbb358b2943b141a2313b4a7ca3 https://community-extensions.duckdb.org/v2.0.0/osx_arm64/otlp.duckdb_extension.gz
+otlp   linux_arm64  151b9bed1557c4d0f3800260a9a7044910f97399877afd6d0e483dc8a0dcb032 https://community-extensions.duckdb.org/v2.0.0/linux_arm64/otlp.duckdb_extension.gz
+otlp   osx_amd64    dad3a8ded72e6417c40782a9e978f5a79c80ed11d6a9de7e0958d2d96dfb7834 https://community-extensions.duckdb.org/v2.0.0/osx_amd64/otlp.duckdb_extension.gz
+otlp   linux_amd64  0d41817d3695f60281b340650d6f113727b87434b8defc6dd411fcd904e942c3 https://community-extensions.duckdb.org/v2.0.0/linux_amd64/otlp.duckdb_extension.gz
+
+fts    osx_arm64    d62cb8678763117e7cd2f5e7825ff97836f31d7d948c28fceb8fe300806bd5ac https://extensions.duckdb.org/v2.0.0/osx_arm64/fts.duckdb_extension.gz
+fts    linux_arm64  b96ab6ec6b657175ab0c5ea3b6baf2ff1636de22a3ab173762f16f5aaa82ca6b https://extensions.duckdb.org/v2.0.0/linux_arm64/fts.duckdb_extension.gz
+fts    osx_amd64    25b271e34fd6e9388fb649654824ce48d1b85f9cd8c1aacf031d43230553b7d9 https://extensions.duckdb.org/v2.0.0/osx_amd64/fts.duckdb_extension.gz
+fts    linux_amd64  d0236578d3758b689c871957ce8654b629b11c8008f7789054a526446c6bf8a3 https://extensions.duckdb.org/v2.0.0/linux_amd64/fts.duckdb_extension.gz
+
+# capped 0.1.0: github.com/hamin/duckdb-capped/releases/tag/v0.1.0
+capped osx_arm64    c71023a17f3ab18f6e6bbf50b41db1f3904dd06b1b2ff31bd4eec2ee16522a30 https://github.com/hamin/duckdb-capped/releases/download/v0.1.0/capped-duckdb-v2.0.0-osx_arm64.duckdb_extension.gz
+capped osx_amd64    154cf8ab399d562c35492c85c9a75bb569b759b3fef5535045d985512b70a95f https://github.com/hamin/duckdb-capped/releases/download/v0.1.0/capped-duckdb-v2.0.0-osx_amd64.duckdb_extension.gz
+capped linux_arm64  c84a4f6bedbcb7119a8fd2252e51ff003a8171fef9672a28e8df99a40abbc367 https://github.com/hamin/duckdb-capped/releases/download/v0.1.0/capped-duckdb-v2.0.0-linux_arm64.duckdb_extension.gz
+capped linux_amd64  97bfdb37bfcc54aba4687104f3936254ef142837a916f743ebe3e1821ae39920 https://github.com/hamin/duckdb-capped/releases/download/v0.1.0/capped-duckdb-v2.0.0-linux_amd64.duckdb_extension.gz

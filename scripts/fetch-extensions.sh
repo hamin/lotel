@@ -4,15 +4,12 @@
 #
 #   just fetch-extensions          # or ./scripts/fetch-extensions.sh
 #
-# otlp + fts come from extensions.lock: pinned URL + sha256 per platform,
-# fetched from the DuckDB registries and verified — a silent miss is not
-# possible (build.rs would otherwise stub the blob with zero bytes and the
-# binary would ingest nothing).
+# All three come from extensions.lock: pinned URL + sha256 per platform,
+# downloaded and verified, so a silent miss is not possible (build.rs would
+# otherwise stub the blob with zero bytes and the binary would ingest nothing).
 #
-# capped has no published release yet (see extensions.lock): the blob comes
-# from $CAPPED_EXT when set (the Dockerfile's capped stage exports it), else
-# from the sibling release build. Missing = hard error, same as the old
-# justfile cp's — but with a message that names both remedies.
+# CAPPED_EXT=/path/to/capped.duckdb_extension uses a local capped build
+# instead of the pinned release (for working on capped itself).
 #
 # Platform is auto-detected (override with LOTEL_EXT_PLATFORM=… for a
 # deliberate cross-fetch).
@@ -20,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DEST="crates/lotel/extensions"
-LOCK="extensions.lock"
+LOCK="crates/lotel/extensions.lock"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'fetch-extensions: %s\n' "$*" >&2; exit 1; }
@@ -62,8 +59,14 @@ mkdir -p "$DEST"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# --- 3. otlp + fts: download → gunzip → verify sha256 → install atomically.
-for ext in otlp fts; do
+# --- 3. download → gunzip → verify sha256 → install atomically.
+for ext in otlp fts capped; do
+    if [ "$ext" = capped ] && [ -n "${CAPPED_EXT:-}" ]; then
+        [ -s "$CAPPED_EXT" ] || die "CAPPED_EXT=$CAPPED_EXT is missing or empty"
+        say "fetch-extensions: capped $platform ← $CAPPED_EXT (local override, not hash-checked)"
+        cp "$CAPPED_EXT" "$DEST/capped.duckdb_extension"
+        continue
+    fi
     read -r want url <<<"$(lock_row "$ext" "$platform")"
     case "$url" in
         http://*|https://*) ;;
@@ -85,17 +88,7 @@ for ext in otlp fts; do
     say "fetch-extensions: $ext $platform ok (sha256 $got)"
 done
 
-# --- 4. capped: source build — $CAPPED_EXT, else the sibling release tree.
-lock_row capped "$platform" >/dev/null # the platform must be declared in the lock
-capped_src="${CAPPED_EXT:-../capped/build/release/extension/capped/capped.duckdb_extension}"
-[ -s "$capped_src" ] || die "capped blob missing or empty: $capped_src
-capped has no published release yet (extensions.lock: 'source build').
-Either build the sibling repo:  cd ../capped && GEN=ninja make release
-or point at a prebuilt blob:    CAPPED_EXT=/path/to/capped.duckdb_extension $0"
-say "fetch-extensions: capped $platform ← $capped_src"
-cp "$capped_src" "$DEST/capped.duckdb_extension"
-
-# --- 5. Final gate: nothing stub-shaped may leave this script.
+# --- 4. Final gate: nothing stub-shaped may leave this script.
 for blob in capped otlp fts; do
     f="$DEST/$blob.duckdb_extension"
     [ -s "$f" ] || die "$f is missing or 0 bytes after fetch — refusing to leave a stub behind"

@@ -4,9 +4,7 @@ version := `awk -F'"' '/^version =/ {print $2; exit}' crates/lotel/Cargo.toml`
 
 # Fetch the extension blobs embedded into the app (build.rs stubs missing
 # ones with zero bytes → a release built without these ingests nothing).
-# otlp/fts: pinned URLs + sha256 in extensions.lock, verified on every fetch.
-# capped: source build (no release yet) — $CAPPED_EXT or the sibling repo
-# (`cd ../capped && GEN=ninja make release`). See scripts/fetch-extensions.sh.
+# All blobs are pinned in crates/lotel/extensions.lock; CAPPED_EXT=<path> uses a local capped build.
 fetch-extensions:
     ./scripts/fetch-extensions.sh
 
@@ -20,11 +18,9 @@ build: fetch-extensions
 dist:
     ./scripts/dist.sh
 
-# Build the container image (lotel:<ver>). The build context is the
-# PARENT dir because capped builds from source in its own Docker stage;
-# lotel/Dockerfile.dockerignore keeps the context lean.
+# Build the container image (lotel:<ver>); .dockerignore keeps the context lean.
 docker:
-    docker build -f Dockerfile -t lotel:{{version}} ..
+    docker build -t lotel:{{version}} .
 
 # Dev loop
 run: fetch-extensions

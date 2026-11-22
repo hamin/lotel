@@ -1,0 +1,117 @@
+name: Release
+
+# Push a tag like v0.1.0 (matching crates/lotel/Cargo.toml) to publish a
+# GitHub Release: one tarball per platform plus SHA256SUMS.txt. These are what
+# scripts/install.sh, the Homebrew formula and cargo-binstall download.
+
+on:
+  push:
+    tags: ["v*"]
+  # Dry run from the Actions tab: builds and boot-tests all four tarballs and
+  # keeps them as workflow artifacts; publishes nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-14          # darwin-arm64
+          - os: macos-15-intel    # darwin-x86_64
+          - os: ubuntu-22.04      # linux-x86_64, glibc 2.35
+          - os: ubuntu-22.04-arm  # linux-aarch64, glibc 2.35
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tag matches the crate version
+        if: github.event_name == 'push'
+        run: |
+          want="v$(awk -F'"' '/^version =/ {print $2; exit}' crates/lotel/Cargo.toml)"
+          [ "$want" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $want"; exit 1; }
+      - name: cargo-about (THIRD-PARTY-LICENSES)
+        run: cargo install cargo-about --version 0.9.3 --locked --features cli
+      - name: Fetch extensions
+        run: ./scripts/fetch-extensions.sh
+      - name: Build, package and boot-test the tarball
+        run: ./scripts/dist.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/lotel-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          ls lotel-*.tar.gz
+          [ "$(ls lotel-*.tar.gz | wc -l)" -eq 4 ] || { echo "expected 4 tarballs"; exit 1; }
+          sha256sum lotel-*.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '
+            /^## \[/ { if (on) exit; if (index($0, "## [" v "]") == 1) { on = 1; next } }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "CHANGELOG.md has no section for $v"; exit 1; }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/lotel-*.tar.gz dist/SHA256SUMS.txt --title "lotel ${GITHUB_REF_NAME#v}" --notes-file notes.md
+
+  homebrew:
+    # Updates Formula/lotel.rb in hamin/homebrew-tap. Needs the repo secret
+    # HOMEBREW_TAP_TOKEN: a fine-grained token with contents read/write on
+    # that one repo. Skipped (not failed) until the secret exists.
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.TAP_TOKEN != ''
+      - name: Formula from the published checksums
+        if: env.TAP_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS.txt --dir /tmp/rel
+          scripts/brew-formula.sh "$GITHUB_REF_NAME" /tmp/rel/SHA256SUMS.txt > /tmp/lotel.rb
+      - uses: actions/checkout@v4
+        if: env.TAP_TOKEN != ''
+        with:
+          repository: hamin/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Push the formula
+        if: env.TAP_TOKEN != ''
+        run: |
+          mkdir -p tap/Formula
+          cp /tmp/lotel.rb tap/Formula/lotel.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/lotel.rb
+          git diff --cached --quiet && { echo "formula unchanged"; exit 0; }
+          git commit -m "lotel ${GITHUB_REF_NAME#v}"
+          git push
