@@ -64,8 +64,14 @@ cp scripts/install.sh dist/stage/install.sh
 find dist/stage -exec touch -t 202601010000.00 {} +
 MEMBERS="$(cd dist/stage && find . -type f | LC_ALL=C sort | sed 's|^\./||')"
 rm -f "$TARBALL" dist/SHA256SUMS.txt
-( cd dist/stage && tar -cf ../lotel-dist.tar --format=ustar \
-    --uid 0 --gid 0 --uname root --gname root $MEMBERS )
+# Owner flags differ: GNU tar (Linux) spells them --owner/--group, bsdtar
+# (macOS) --uid/--gid/--uname/--gname. Either way every member is root:root.
+if tar --version 2>/dev/null | grep -q 'GNU tar'; then
+    OWNER_FLAGS="--owner=root:0 --group=root:0"
+else
+    OWNER_FLAGS="--uid 0 --gid 0 --uname root --gname root"
+fi
+( cd dist/stage && tar -cf ../lotel-dist.tar --format=ustar $OWNER_FLAGS $MEMBERS )
 gzip -n -9 -c dist/lotel-dist.tar > "$TARBALL"
 rm -f dist/lotel-dist.tar
 
