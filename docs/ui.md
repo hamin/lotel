@@ -15,6 +15,8 @@ Most pages share one filter bar. See [Filters](#filters) at the end of this page
 - Runtime details: DuckDB and capped versions, the data directory and the OTLP endpoint.
 - A copy-paste block of exporter settings with this instance's endpoint and token.
 
+![The dashboard: row counts per signal and the live trace error rate per service](img/ui-dashboard-day.jpg)
+
 ## Agents
 
 ### Sessions
@@ -22,6 +24,8 @@ Most pages share one filter bar. See [Filters](#filters) at the end of this page
 `/sessions` lists one row per coding agent session, across Claude Code, Codex and opencode: the agent, event and span counts, cost, tokens in and out, and when it was last seen. Each row links to its logs, and to its traces when it has spans.
 
 Click a session to open its timeline at `/sessions?session=<id>`. It shows the session's spans as a waterfall and every event in order, with runs of the same event folded into one row. Click a span to see its details.
+
+![A session timeline: each model call and tool run as a bar, with its duration](img/session-day.jpg)
 
 ### Spend
 
@@ -34,6 +38,8 @@ The numbers come from the agents' cost and token metrics. Points that are runnin
 `/tools` shows one row per tool your agents called: calls, failures, p50, p95 and max duration, and how many calls you rejected. Each count links to the spans and logs behind it.
 
 Durations come from tool spans and measure the execution, not the time spent waiting for your approval. If the view has no tool spans, the page falls back to the tool-call counters and shows no durations.
+
+![The Tools page: calls, failures and latency per tool](img/ui-tools-day.jpg)
 
 ### Setup
 
@@ -50,11 +56,15 @@ Durations come from tool spans and measure the execution, not the time spent wai
 - **JSON bodies**: a JSON body, such as an agent event, renders as a message plus `key=value` chips. Click a chip to filter on it.
 - **Trace links**: a row links to its trace when that trace is still stored.
 
+![The Logs page: severity and service facets above the matching rows](img/ui-logs-day.jpg)
+
 ### Traces
 
 `/traces` shows spans. Filter by service, span name, status, minimum duration in milliseconds, time range and attributes. The page shows the overall p95 over time, a span duration distribution, a per-service summary and the recent spans.
 
 Open a trace at `/traces?trace=<id>` for its waterfall: spans in tree order, placed by start time and duration, colored by service, with errors outlined. Click a span for its attributes. When logs carry the trace or span id, a link shows how many and opens them on `/logs`.
+
+![A trace waterfall across three services](img/ui-trace-day.jpg)
 
 ### Metrics
 
@@ -69,13 +79,19 @@ Open a trace at `/traces?trace=<id>` for its waterfall: spans in tree order, pla
 
 Results go through the same content masking as the other pages. See [Privacy](privacy.md).
 
+![Explore: p95 span duration by service, as a chart and a table, with facets](img/explore-day.jpg)
+
 ### Services
 
 `/services` is a service map built from parent and child spans. Each node is a service, and each edge is labeled with its call count. An edge is red when at least 2% of its calls are errors. Click a service to open its spans. The page also shows error-rate and p95 trends.
 
+![The service map: services, the calls between them, error rates and latency](img/services-day.jpg)
+
 ### Storage
 
 `/storage` shows what is on disk and what forgets next: every table and segment with its rows, bytes, time range and caps. See [Retention](retention.md).
+
+![The Storage page: each table's Parquet segments on its retention window](img/storage-day.jpg)
 
 ## Filters
 

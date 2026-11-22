@@ -1,47 +1,97 @@
-# lotel
+<p align="center">
+  <a href="https://lotel.io">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/img/banner-night.png">
+      <img src="docs/img/banner-day.png" alt="lotel: see what your coding agents did. One binary. OpenTelemetry that forgets on schedule." width="720">
+    </picture>
+  </a>
+</p>
 
-**See what your coding agents did.** One small binary takes their OpenTelemetry,
-shows every session, and forgets it on schedule.
+<p align="center">
+  <a href="https://lotel.io"><b>Website</b></a> &nbsp;·&nbsp;
+  <a href="https://lotel.io/docs/"><b>Docs</b></a> &nbsp;·&nbsp;
+  <a href="https://lotel.io/docs/quickstart/"><b>Quickstart</b></a> &nbsp;·&nbsp;
+  <a href="https://github.com/hamin/lotel/releases"><b>Releases</b></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/hamin/lotel/actions/workflows/ci.yml"><img src="https://github.com/hamin/lotel/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/hamin/lotel/releases"><img src="https://img.shields.io/github/v/release/hamin/lotel?label=release" alt="Latest release"></a>
+  <a href="https://crates.io/crates/lotel"><img src="https://img.shields.io/crates/v/lotel" alt="crates.io"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+</p>
+
+lotel is one small binary that takes your coding agents' OpenTelemetry, shows
+every session, and forgets it on schedule. Point Claude Code or Codex at it and
+see each model call, tool run and permission wait on a timeline, with what it
+cost.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/session-night.jpg">
   <img src="docs/img/session-day.jpg" alt="A Claude Code session in lotel: each model call and tool run as a bar on a timeline, with its duration">
 </picture>
 
-lotel accepts OTLP/HTTP, stores logs, traces and metrics in DuckDB, and serves
-its UI on localhost. Retention is enforced by the storage itself: whole Parquet
-files are deleted when they pass their use-by date, so the disk never fills.
-No collector, no JVM, no cluster, no Docker Compose.
+- **One binary, nothing else to run.** OTLP/HTTP in, a web UI out, DuckDB
+  inside. No collector, no JVM, no cluster, no Docker Compose.
+- **Built for coding agents.** Sessions, spend and tool health for Claude Code
+  and Codex, with prompt and tool text hidden unless you opt in.
+- **Data with a use-by date.** Retention lives in the storage: whole Parquet
+  files are deleted when they expire, so the disk never fills.
+- **A whole OpenTelemetry backend.** Logs, traces, metrics, a service map and
+  Explore, for your own apps too.
 
 ## Install
 
+lotel runs on macOS and Linux, on arm64 and x86_64. Pick one:
+
+**Install script**
+
 ```sh
-curl -fsSL https://lotel.io/install.sh | sh     # or: brew install hamin/tap/lotel
-                                                #     cargo binstall lotel
+curl -fsSL https://lotel.io/install.sh | sh
 ```
 
-macOS and Linux, arm64 and x86_64. More ways (Docker, from source) in
-[Install](docs/install.md).
+**Homebrew**
+
+```sh
+brew install hamin/tap/lotel
+```
+
+**Cargo**
+
+```sh
+cargo binstall lotel
+```
+
+Docker and building from source are in the [install docs](https://lotel.io/docs/install/).
 
 ## Quickstart
 
+Start lotel:
+
 ```sh
-lotel    # UI on http://127.0.0.1:8080, OTLP on 127.0.0.1:4318, token in the banner
+lotel
 ```
 
-Open http://127.0.0.1:8080/setup and paste its block into the shell you run
-Claude Code or Codex from. Every model call, tool run and permission decision
-then shows up under Sessions, Spend and Tools. Your own apps can send to the
-same endpoint with any OpenTelemetry SDK.
+Its startup banner shows the three things you need:
 
-## What you get
+- **UI:** http://127.0.0.1:8080
+- **OTLP endpoint:** `http://127.0.0.1:4318`
+- **Bearer token:** a random token, or the one you set in `LOTEL_INGEST_TOKEN`
+
+Then open http://127.0.0.1:8080/setup and paste its block into the shell you
+run Claude Code or Codex from. Every model call, tool run and permission
+decision shows up under Sessions, Spend and Tools. Your own apps can send to
+the same endpoint with any OpenTelemetry SDK; see
+[Sending telemetry](https://lotel.io/docs/sending-telemetry/).
+
+## Features
 
 ### Every agent session, step by step
 
 Claude Code and Codex already export OpenTelemetry. Point them at lotel and each
 session becomes a timeline of model calls, tool runs and permission waits, with
 what it cost under **Spend** and which tools failed under **Tools**. Prompt and
-tool text stays hidden unless you opt in ([Privacy](docs/privacy.md)).
+tool text stays hidden unless you opt in ([Privacy](https://lotel.io/docs/privacy/)).
 
 ### Explore any attribute
 
@@ -67,24 +117,26 @@ error rates and latency come straight from the spans.
 
 Logs keep 7 days, traces 3 and metrics 30, or 2 GB per table, whichever comes
 first. The Storage page shows every Parquet segment on its retention window and
-when the next one goes ([Retention](docs/retention.md)).
+when the next one goes ([Retention](https://lotel.io/docs/retention/)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/storage-night.jpg">
   <img src="docs/img/storage-day.jpg" alt="The Storage page: each table's Parquet segments on its retention window, with when the next one is deleted">
 </picture>
 
-## Docs
+## Documentation
 
-The docs live in [`docs/`](docs/) and on [lotel.io/docs](https://lotel.io/docs/):
+Everything is at **[lotel.io/docs](https://lotel.io/docs/)**:
 
-- [Quickstart](docs/quickstart.md): run it and point your agents at it
-- [Install](docs/install.md): install script, Homebrew, cargo, Docker, source
-- [Sending telemetry](docs/sending-telemetry.md): OTLP endpoints, auth, SDK examples
-- [Retention](docs/retention.md): how and when data is forgotten
-- [Configuration](docs/configuration.md): every environment variable
-- [Privacy](docs/privacy.md): what is stored and what the UI shows
-- [The UI](docs/ui.md): each page, and the filter syntax
+- [**Quickstart**](https://lotel.io/docs/quickstart/): run lotel and point your agents at it
+- [**Install**](https://lotel.io/docs/install/): install script, Homebrew, cargo, Docker, source
+- [**Sending telemetry**](https://lotel.io/docs/sending-telemetry/): OTLP endpoints, auth, SDK examples
+- [**Retention**](https://lotel.io/docs/retention/): how and when data is forgotten
+- [**Configuration**](https://lotel.io/docs/configuration/): every environment variable
+- [**Privacy**](https://lotel.io/docs/privacy/): what is stored and what the UI shows
+- [**The UI**](https://lotel.io/docs/ui/): each page, and the filter syntax
+
+The same pages live in [`docs/`](docs/) in this repo.
 
 ## How it works
 
@@ -94,32 +146,30 @@ OTLP/HTTP :4318 ──▶ otlp extension ──▶ capped DuckDB tables ──�
                                        UI :8080 (sessions, spend, tools, logs, traces, metrics, storage)
 ```
 
-Two DuckDB extensions, embedded into the binary at compile time and
-materialized to `<data>/extensions/` at boot:
+Two DuckDB extensions are built into the binary and do the heavy lifting:
 
-- [`capped`](https://github.com/hamin/duckdb-capped) provides
-  the storage layer: tables
-  are sealed parquet segments plus one open segment, `WITH (time_col, ttl,
-  max_bytes)` policies enforce retention at the segment level, and
-  `capped_tables()` / `capped_status()` expose the truth.
-- the community [`otlp`](https://github.com/smithclay/duckdb-otlp) extension
-  provides `otlp_serve()`: an OTLP/HTTP receiver that appends directly into
-  the capped tables (lotel pre-creates the six canonical `otlp_*` tables with
-  cap policies so the receiver never creates an uncapped one).
+- **[capped](https://github.com/hamin/duckdb-capped)** is the storage layer.
+  Each table is a set of sealed Parquet segments plus one open segment, and
+  `WITH (ttl, max_bytes)` policies drop whole segments as they expire.
+- **[otlp](https://github.com/smithclay/duckdb-otlp)** is the OTLP/HTTP
+  receiver. It appends straight into the capped tables, which lotel creates
+  with their limits before the receiver starts.
 
-The UI is [Topcoat](https://github.com/tokio-rs/topcoat) server-rendered
-views; the live tail and charts poll small bare fragment/JSON endpoints.
+The UI is server-rendered with [Topcoat](https://github.com/tokio-rs/topcoat);
+the live tail and charts poll small fragment and JSON endpoints.
 
-## Building
+## Development
 
-```sh
-just fetch-extensions   # downloads the pinned capped, otlp and fts extensions
-cargo build --release   # target/release/lotel
-cargo test              # unit tests (the database tests need the extensions)
-just smoke              # boots the binary, ingests testdata/, checks every page
-just stress             # 30s storm: concurrent ingest + every endpoint, p95 gates
-just soak               # 10 min sustained: watchdog over all pages, leak/fd/heap gates
-```
+You need Rust and [just](https://github.com/casey/just).
+
+| Command | What it does |
+| --- | --- |
+| `just fetch-extensions` | Downloads the pinned `capped`, `otlp` and `fts` extensions |
+| `cargo build --release` | Builds `target/release/lotel` |
+| `cargo test` | Unit and database tests |
+| `just smoke` | Boots the binary, ingests `testdata/`, checks every page |
+| `just stress` | 30-second storm of concurrent ingest and page loads, with p95 gates |
+| `just soak` | 10 minutes of sustained load, checking for leaks and growth |
 
 `just fetch-extensions` downloads the pinned `capped`, `otlp` and `fts`
 builds listed in `crates/lotel/extensions.lock` and checks each one's sha256. `capped`
@@ -135,18 +185,21 @@ the Homebrew formula.
 
 ### Changing the look
 
-The UI's look is owned by `design/useby` (its `build.py` generates the token
-blocks; `useby.css` is the component sheet), and `src/skin.rs` is generated
-from it, never hand-edited:
+The UI's look is owned by `design/useby`: its `build.py` generates the token
+blocks and `useby.css` is the component sheet. `src/skin.rs` is generated from
+them, never edited by hand. After editing either file:
 
-```sh
-# edit design/useby/build.py or useby.css
-python3 design/useby/build.py --check   # WCAG contrast gate; must be 0 failing pairs
-python3 scripts/gen-skin.py             # regenerates src/skin.rs from design/useby
-cargo build
-```
+1. Check contrast. This must report 0 failing pairs:
+   ```sh
+   python3 design/useby/build.py --check
+   ```
+2. Regenerate the skin, then rebuild:
+   ```sh
+   python3 scripts/gen-skin.py
+   cargo build
+   ```
 
-## The test ladder
+### The test ladder
 
 | gate | command | what it proves |
 | --- | --- | --- |
