@@ -1593,7 +1593,7 @@ const QBLD_JS: &str = r#"
         q+='&measures='+encodeURIComponent(JSON.stringify(measures));
         q+='&filters='+encodeURIComponent(JSON.stringify(filters));
         q+='&group='+encodeURIComponent(JSON.stringify(group));
-        window.location.search=q;
+        if (window.LotelNav) LotelNav.go(location.pathname+q); else window.location.search=q;
     }
 
     // ---- results chart ----

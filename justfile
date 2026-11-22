@@ -65,5 +65,10 @@ stress:
 agent-stress:
     ./scripts/agent-stress.sh
 
+# In-place navigation in a real Chrome (needs Node 22+), against a running lotel.
+#   just nav-test http://127.0.0.1:18096
+nav-test url="http://127.0.0.1:8080":
+    node scripts/nav-test.mjs {{url}}
+
 # Personal recipes live in local.just (not committed), if present.
 import? 'local.just'

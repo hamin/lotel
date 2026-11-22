@@ -33,7 +33,7 @@ use crate::{
     db::Db,
     ingest::Ingest,
     ui::{
-        CSS, SKIN_COOKIE, UseBy, live_refresh, nav_groups, parse_skin, query_has_skin, short_ttl,
+        CSS, NAV_JS, SKIN_COOKIE, UseBy, live_refresh, nav_groups, parse_skin, query_has_skin, short_ttl,
         theme_panel, thousands,
     },
 };
@@ -115,6 +115,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
                 <style>(Unescaped::new_unchecked(CSS))</style>
             </head>
             <body>
+                <div class="navbar" aria-hidden="true"></div>
                 <div class="layout">
                     <nav>
                         <p class="brand">"lotel"</p>
@@ -145,6 +146,7 @@ async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<BoxView<'_>> {
                         (slot)
                     </main>
                 </div>
+                <script>(Unescaped::new_unchecked(NAV_JS))</script>
             </body>
         </html>
     }

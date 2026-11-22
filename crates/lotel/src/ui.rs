@@ -587,13 +587,26 @@ window.LotelLive=(function(){
       var ds=t.querySelectorAll('details[data-key]');
       for(var i=0;i<ds.length;i++) if(m[ds[i].getAttribute('data-key')]) ds[i].open=true;
     }
+    function keys(){
+      var m={}, n=0, ks=t.querySelectorAll('[data-key]');
+      for(var i=0;i<ks.length;i++){ m[ks[i].getAttribute('data-key')]=1; n++; }
+      return n?m:null;
+    }
+    function markNew(seen){
+      if(!seen) return;
+      var ks=t.querySelectorAll('[data-key]');
+      for(var i=0;i<ks.length;i++) if(!seen[ks[i].getAttribute('data-key')]) ks[i].classList.add('live-new');
+    }
     function tick(){
+      // in-place navigation swapped this page away: stop polling for it
+      if(!t.isConnected){ off(); return; }
       if(document.hidden) return;
       fetch(url(),{cache:'no-store'}).then(function(r){return r.text();}).then(function(h){
-        if(selectedInTarget()) return;
-        var m=openKeys();
+        if(!t.isConnected||selectedInTarget()) return;
+        var m=openKeys(), seen=keys();
         t.innerHTML=h;
         restoreKeys(m);
+        markNew(seen);
       }).catch(function(){});
     }
     function on(){ if(!timer){ t.setAttribute('data-live','on'); timer=setInterval(tick,ms); tick(); } }
@@ -603,6 +616,122 @@ window.LotelLive=(function(){
     sync();
   }
   return {sub:sub};
+})();
+"#;
+
+/// In-place navigation, loaded once in the layout. Every page still works as
+/// a plain server-rendered document (no JS, or any failure here, falls back
+/// to an ordinary page load); with JS, same-origin links and GET forms fetch
+/// the next page and swap only `<main>` and the nav, so the chrome stays put
+/// and the content eases in instead of the whole window flashing.
+///
+/// - A thin bar at the top shows a request in flight; content dims only if
+///   the request takes longer than a beat (CSS delays it).
+/// - The swapped `<main>`'s inline scripts are re-run (they are all
+///   re-runnable IIFEs / `var`s), so charts, the Explore builder and live
+///   refresh boot exactly as on a full load. Live timers whose target left
+///   the page stop themselves (see `LIVE_JS`).
+/// - Back/forward restore the page and its scroll position; a link or form
+///   that stays on the same path (filters, tabs, facet drills) keeps the
+///   reader's scroll position.
+/// - The skin attributes on `<html>` are copied from the response, so the
+///   theme panel switches look without a reload.
+/// - Opt out per element with `data-nav="off"`; `/api/` and `/assets/` links
+///   and modified clicks (new tab, download) are left to the browser.
+///
+/// Written for Chrome 98 (no View Transitions, no `:has()`).
+pub(crate) const NAV_JS: &str = r#"
+(function(){
+  if(!window.fetch||!window.DOMParser||!history.pushState||!window.URL) return;
+  var H=document.documentElement, seq=0, ctl=null, doneT=null, SKIN=['data-pal','data-scheme','data-font','data-style'];
+  if('scrollRestoration' in history) history.scrollRestoration='manual';
+  history.replaceState({lotel:1,y:window.scrollY},'');
+
+  function ours(u){
+    return u.origin===location.origin && u.pathname.indexOf('/api/')!==0 && u.pathname.indexOf('/assets/')!==0;
+  }
+  function onlyHash(u){ return u.hash && u.pathname===location.pathname && u.search===location.search; }
+
+  document.addEventListener('click',function(e){
+    if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey) return;
+    var a=e.target.closest?e.target.closest('a[href]'):null;
+    if(!a||(a.target&&a.target!=='_self')||a.hasAttribute('download')||a.closest('[data-nav="off"]')) return;
+    var u=new URL(a.href,location.href);
+    if(!ours(u)||onlyHash(u)) return;
+    e.preventDefault();
+    go(u.href,{push:true,keep:u.pathname===location.pathname});
+  });
+
+  document.addEventListener('submit',function(e){
+    var f=e.target;
+    if(e.defaultPrevented||(f.getAttribute('method')||'get').toLowerCase()!=='get'||f.closest('[data-nav="off"]')) return;
+    var u=new URL(f.getAttribute('action')||location.href,location.href);
+    if(!ours(u)) return;
+    var fd=new FormData(f), s=e.submitter;
+    if(s&&s.name) fd.append(s.name,s.value);
+    u.search=new URLSearchParams(fd).toString();
+    e.preventDefault();
+    if(s) s.setAttribute('aria-busy','true');
+    go(u.href,{push:true,keep:u.pathname===location.pathname});
+  });
+
+  window.addEventListener('popstate',function(e){
+    if(e.state&&e.state.lotel) go(location.href,{push:false,y:e.state.y||0});
+  });
+
+  function go(url,o){
+    o=o||{};
+    var my=++seq;
+    if(ctl) ctl.abort();
+    ctl=window.AbortController?new AbortController():null;
+    clearTimeout(doneT);
+    H.setAttribute('data-nav','loading');
+    if(o.push) history.replaceState({lotel:1,y:window.scrollY},'');
+    fetch(url,{credentials:'same-origin',signal:ctl?ctl.signal:undefined}).then(function(r){
+      if((r.headers.get('content-type')||'').indexOf('text/html')<0) throw new Error('not html');
+      return r.text().then(function(t){ return {t:t,url:r.url||url}; });
+    }).then(function(x){
+      if(my!==seq) return;
+      var d=new DOMParser().parseFromString(x.t,'text/html');
+      var nm=d.querySelector('main'), om=document.querySelector('main');
+      if(!nm||!om) throw new Error('no main');
+      if(o.push) history.pushState({lotel:1,y:0},'',x.url);
+      swap(d,nm,om,o);
+    }).catch(function(err){
+      if(err&&err.name==='AbortError') return;
+      if(my===seq) location.href=url;
+    });
+  }
+
+  function swap(d,nm,om,o){
+    SKIN.forEach(function(k){ var v=d.documentElement.getAttribute(k); if(v!==null) H.setAttribute(k,v); });
+    if(d.title) document.title=d.title;
+    var nn=d.querySelector('nav'), on=document.querySelector('nav');
+    if(nn&&on) on.innerHTML=nn.innerHTML;
+    var y=window.scrollY;
+    om.parentNode.replaceChild(nm,om);
+    var ss=nm.querySelectorAll('script');
+    for(var i=0;i<ss.length;i++){
+      var n=document.createElement('script');
+      for(var j=0;j<ss[i].attributes.length;j++) n.setAttribute(ss[i].attributes[j].name,ss[i].attributes[j].value);
+      n.text=ss[i].text;
+      ss[i].parentNode.replaceChild(n,ss[i]);
+    }
+    var hash=location.hash?document.getElementById(decodeURIComponent(location.hash.slice(1))):null;
+    if(o.y!==undefined) window.scrollTo(0,o.y);
+    else if(hash) hash.scrollIntoView();
+    else if(o.keep) window.scrollTo(0,y);
+    else {
+      window.scrollTo(0,0);
+      var h=nm.querySelector('h1');
+      if(h){ h.setAttribute('tabindex','-1'); h.focus({preventScroll:true}); }
+    }
+    nm.classList.add('swapped');
+    H.setAttribute('data-nav','done');
+    doneT=setTimeout(function(){ H.removeAttribute('data-nav'); nm.classList.remove('swapped'); },700);
+  }
+
+  window.LotelNav={go:function(url){ go(new URL(url,location.href).href,{push:true,keep:true}); }};
 })();
 "#;
 

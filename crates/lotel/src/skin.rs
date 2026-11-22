@@ -547,6 +547,34 @@ details.fline[open] { padding-bottom: var(--space-xs); }
 }
 
 
+
+.navbar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: var(--z-toast); pointer-events: none; background: var(--color-accent-2); transform-origin: 0 50%; transform: scaleX(0); opacity: 0; }
+html[data-nav="loading"] .navbar { opacity: 1; animation: nav-creep 6s var(--ease-out) forwards; }
+html[data-nav="done"] .navbar { transform: scaleX(1); opacity: 0; transition: transform var(--dur-micro) var(--ease-out), opacity var(--dur-short) var(--ease-out) var(--dur-micro); }
+@keyframes nav-creep { 0% { transform: scaleX(0); } 15% { transform: scaleX(0.35); } 100% { transform: scaleX(0.9); } }
+
+html[data-nav="loading"] main { opacity: 0.6; transition: opacity var(--dur-short) var(--ease-out) 180ms; }
+html[data-nav="loading"], html[data-nav="loading"] a, [aria-busy="true"] { cursor: progress; }
+button[aria-busy="true"] { opacity: 0.7; }
+
+main.swapped > :not(header) { animation: rise var(--dur-short) var(--ease-out) both; }
+main.swapped > :nth-child(3) { animation-delay: 30ms; }
+main.swapped > :nth-child(4) { animation-delay: 60ms; }
+main.swapped > :nth-child(5) { animation-delay: 90ms; }
+main.swapped > :nth-child(n+6) { animation-delay: 120ms; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+details[open] > :not(summary) { animation: rise var(--dur-short) var(--ease-out); }
+
+.facet-bar i, .hbar { transform-origin: 0 50%; animation: bar-grow var(--dur-long) var(--ease-out); }
+[data-live] .facet-bar i, [data-live] .hbar { animation: none; }
+@keyframes bar-grow { from { transform: scaleX(0); } }
+
+.live-new > summary, tr.live-new > td, .live-new:not(details):not(tr) { animation: live-in 1.6s var(--ease-out); }
+@keyframes live-in { from { background-color: var(--color-sel); } }
+h1[tabindex="-1"]:focus { outline: none; }
+
+
 "##;
 
 /// (value, label) per palette; value is the data-pal attribute and the
