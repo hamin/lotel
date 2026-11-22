@@ -1,0 +1,27 @@
+name: Stats
+
+# Once a day, post download and repo numbers to lotel.io/api/stats (stored in
+# lotel.io's D1; read them with GET /api/stats). See scripts/stats-snapshot.py.
+# Secrets: STATS_TOKEN (lotel.io's EXPORT_TOKEN); optional TRAFFIC_TOKEN for
+# GitHub's 14-day traffic numbers, which GITHUB_TOKEN cannot read.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post today's numbers
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STATS_URL: https://lotel-io.pages.dev/api/stats
+          STATS_TOKEN: ${{ secrets.STATS_TOKEN }}
+          TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+        run: python3 scripts/stats-snapshot.py
