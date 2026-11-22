@@ -29,7 +29,7 @@ jobs:
           - os: ubuntu-22.04-arm  # linux-aarch64, glibc 2.35
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Tag matches the crate version
         if: github.event_name == 'push'
@@ -53,7 +53,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -88,7 +88,7 @@ jobs:
     env:
       TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: env.TAP_TOKEN != ''
       - name: Formula from the published checksums
         if: env.TAP_TOKEN != ''
@@ -97,7 +97,7 @@ jobs:
         run: |
           gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS.txt --dir /tmp/rel
           scripts/brew-formula.sh "$GITHUB_REF_NAME" /tmp/rel/SHA256SUMS.txt > /tmp/lotel.rb
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: env.TAP_TOKEN != ''
         with:
           repository: hamin/homebrew-tap
