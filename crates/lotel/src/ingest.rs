@@ -12,7 +12,7 @@ use crate::db::Db;
 /// `pub(crate)` so the Fields panel's fixture tests can `LOAD` it and read
 /// the OTLP JSON fixtures with `read_otlp_*`.
 pub(crate) const OTLP_EXTENSION: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/extensions/otlp.duckdb_extension"));
+    include_bytes!(concat!(env!("OUT_DIR"), "/otlp.duckdb_extension"));
 
 /// The canonical duckdb-otlp table layout (v0.5 schema) with capped policies.
 /// Kept in sync with the bundled otlp extension; `just fetch-extensions`
@@ -127,10 +127,13 @@ impl Ingest {
 
 fn materialize_otlp(cfg: &Config, ext_dir: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
     let path = ext_dir.join("otlp.duckdb_extension");
-    if !path.exists() {
-        if cfg.extension_dir.is_some() {
+    if cfg.extension_dir.is_some() {
+        if !path.exists() {
             anyhow::bail!("LOTEL_EXTENSION_DIR set but no otlp.duckdb_extension in {}", ext_dir.display());
         }
+    } else {
+        // Rewrite every boot, like capped and fts: after an upgrade the data
+        // dir must not keep loading the previous binary's otlp build.
         fs::write(&path, OTLP_EXTENSION)?;
     }
     Ok(path)
