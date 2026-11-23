@@ -6,6 +6,7 @@ mod assets;
 mod config;
 mod correlate;
 mod db;
+mod duckdb_link;
 mod fields;
 mod filters;
 mod ingest;

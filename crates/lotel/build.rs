@@ -8,6 +8,10 @@
 //! 3. `LOTEL_STUB_EXTENSIONS=1` writes zero-byte stubs instead, for builds
 //!    that never load them (docs, offline clippy). A stubbed binary ingests
 //!    nothing, and `just dist` refuses to package one.
+//!
+//! DuckDB itself comes from its prebuilt static libraries (`duckdb.lock`)
+//! unless the `bundled-duckdb` feature compiles it from source; see
+//! `stage_duckdb` and src/duckdb_link.rs.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -48,6 +52,118 @@ fn main() {
     }
 
     stage_extensions();
+    stage_duckdb();
+}
+
+/// The static libraries lotel links from DuckDB's prebuilt archive. The
+/// archive also carries ICU, tpch, tpcds, autocomplete, httplib and the shell;
+/// a source build has none of those, so neither does this one.
+const DUCKDB_LIBS: [&str; 5] = [
+    "libduckdb_static.a",
+    "libduckdb_loadable_extensions.a",
+    "libcore_functions_extension.a",
+    "libjson_extension.a",
+    "libparquet_extension.a",
+];
+
+/// Link DuckDB from its prebuilt static libraries instead of compiling it.
+///
+/// With the duckdb crate's `bundled` feature off, libduckdb-sys asks the
+/// linker for `-lduckdb`. This puts `libduckdb.a` (the archive's
+/// libduckdb_static.a) first on the search path to answer it, and links the
+/// extensions a source build compiles in. src/duckdb_link.rs registers them
+/// at startup, which a source build does by itself.
+///
+/// Libraries come from crates/lotel/duckdb/<platform>/ when
+/// `just fetch-extensions` has unpacked them there, else from the archive
+/// pinned in duckdb.lock, downloaded into OUT_DIR and sha256-checked.
+fn stage_duckdb() {
+    println!("cargo::rustc-check-cfg=cfg(lotel_prebuilt_duckdb)");
+    println!("cargo:rerun-if-changed=duckdb.lock");
+    println!("cargo:rerun-if-changed=duckdb");
+    if std::env::var_os("CARGO_FEATURE_BUNDLED_DUCKDB").is_some() {
+        return;
+    }
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    let target = std::env::var("TARGET").expect("TARGET");
+    let platform = duckdb_platform(&target);
+    let (sha, url) = duckdb_lock_row(&manifest.join("duckdb.lock"), platform);
+
+    // A local unpack is used only if it was made from this exact archive.
+    let local = manifest.join("duckdb").join(platform);
+    let dir = if fs::read_to_string(local.join("archive.sha256")).is_ok_and(|s| s.trim() == sha)
+        && DUCKDB_LIBS.iter().all(|l| local.join(lib_name(l)).is_file())
+    {
+        local
+    } else {
+        let dir = out.join("duckdb");
+        let stamp = dir.join("archive.sha256");
+        if !fs::read_to_string(&stamp).is_ok_and(|s| s.trim() == sha) {
+            unpack_duckdb(&url, &sha, &dir);
+            fs::write(&stamp, &sha).unwrap();
+        }
+        dir
+    };
+
+    println!("cargo:rustc-link-search=native={}", dir.display());
+    for lib in &DUCKDB_LIBS[1..] {
+        let name = lib.trim_start_matches("lib").trim_end_matches(".a");
+        println!("cargo:rustc-link-lib=static={name}");
+    }
+    let cxx = if target.contains("apple") { "c++" } else { "stdc++" };
+    println!("cargo:rustc-link-lib=dylib={cxx}");
+    println!("cargo:rustc-cfg=lotel_prebuilt_duckdb");
+}
+
+/// libduckdb_static.a is installed as libduckdb.a, the name `-lduckdb` finds.
+fn lib_name(archive_member: &str) -> &str {
+    if archive_member == "libduckdb_static.a" { "libduckdb.a" } else { archive_member }
+}
+
+/// The `<sha256> <url>` of duckdb.lock's row for `platform`.
+fn duckdb_lock_row(lock: &Path, platform: &str) -> (String, String) {
+    let text = fs::read_to_string(lock).unwrap_or_else(|e| panic!("lotel: read {}: {e}", lock.display()));
+    let rows: Vec<Vec<&str>> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.split_whitespace().collect::<Vec<_>>())
+        .filter(|f| f.len() == 3 && f[0] == platform)
+        .collect();
+    match rows.as_slice() {
+        [row] => (row[1].to_owned(), row[2].to_owned()),
+        [] => panic!("lotel: duckdb.lock has no row for {platform}; build with --features bundled-duckdb"),
+        _ => panic!("lotel: duckdb.lock has more than one row for {platform}"),
+    }
+}
+
+/// Download the archive, check its sha256, and unpack the libraries lotel links.
+fn unpack_duckdb(url: &str, want: &str, dir: &Path) {
+    fs::create_dir_all(dir).unwrap();
+    let tgz = dir.join("archive.download");
+    let status = Command::new("curl")
+        .args(["-fsSL", "--retry", "3", "-o"])
+        .arg(&tgz)
+        .arg(url)
+        .status()
+        .unwrap_or_else(|e| panic!("lotel: could not run curl to download {url}: {e}. Install curl, or build with --features bundled-duckdb."));
+    assert!(status.success(), "lotel: download failed ({status}): {url}");
+    let got = sha256_file(&tgz);
+    assert!(got == want, "lotel: sha256 mismatch for {url}\n  expected {want} (duckdb.lock)\n  got      {got}");
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&tgz).unwrap()));
+    let mut found = 0;
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().into_owned();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if let Some(lib) = DUCKDB_LIBS.iter().find(|l| **l == name) {
+            entry.unpack(dir.join(lib_name(lib))).unwrap();
+            found += 1;
+        }
+    }
+    fs::remove_file(&tgz).ok();
+    assert!(found == DUCKDB_LIBS.len(), "lotel: {url} is missing some of {DUCKDB_LIBS:?}");
 }
 
 fn stage_extensions() {

@@ -11,6 +11,10 @@
 # CAPPED_EXT=/path/to/capped.duckdb_extension uses a local capped build
 # instead of the pinned release (for working on capped itself).
 #
+# Also unpacks DuckDB's prebuilt static libraries (duckdb.lock) into
+# crates/lotel/duckdb/<platform>/, where build.rs links them from, so a
+# `cargo clean` does not mean downloading them again.
+#
 # Platform is auto-detected (override with LOTEL_EXT_PLATFORM=… for a
 # deliberate cross-fetch).
 set -euo pipefail
@@ -93,6 +97,30 @@ for blob in capped otlp fts; do
     f="$DEST/$blob.duckdb_extension"
     [ -s "$f" ] || die "$f is missing or 0 bytes after fetch — refusing to leave a stub behind"
 done
+# --- 5. DuckDB's static libraries: download, verify, unpack the five lotel links.
+DUCKDB_LOCK="crates/lotel/duckdb.lock"
+DUCKDB_DIR="crates/lotel/duckdb/$platform"
+[ -f "$DUCKDB_LOCK" ] || die "$DUCKDB_LOCK missing"
+read -r dwant durl <<<"$(awk -v p="$platform" '$1==p {print $2, $3}' "$DUCKDB_LOCK")"
+[ -n "$durl" ] || die "duckdb.lock has no row for $platform"
+if [ "$(cat "$DUCKDB_DIR/archive.sha256" 2>/dev/null)" = "$dwant" ]; then
+    say "fetch-extensions: duckdb $platform already unpacked ($DUCKDB_DIR)"
+else
+    say "fetch-extensions: duckdb $platform ← $durl"
+    curl -fsSL --retry 3 --retry-all-errors -o "$TMP/duckdb.tar.gz" "$durl"
+    got="$(hash_file "$TMP/duckdb.tar.gz")"
+    [ "$got" = "$dwant" ] || die "duckdb $platform: sha256 mismatch
+  expected $dwant (duckdb.lock)
+  got      $got
+  from $durl"
+    rm -rf "$DUCKDB_DIR" && mkdir -p "$DUCKDB_DIR"
+    tar -xzf "$TMP/duckdb.tar.gz" -C "$DUCKDB_DIR" libduckdb_static.a libduckdb_loadable_extensions.a \
+        libcore_functions_extension.a libjson_extension.a libparquet_extension.a
+    mv "$DUCKDB_DIR/libduckdb_static.a" "$DUCKDB_DIR/libduckdb.a"
+    printf '%s\n' "$dwant" >"$DUCKDB_DIR/archive.sha256"
+    say "fetch-extensions: duckdb $platform ok (sha256 $got)"
+fi
+
 say "fetch-extensions: installed for $platform:"
 for blob in capped otlp fts; do
     f="$DEST/$blob.duckdb_extension"

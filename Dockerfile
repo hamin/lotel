@@ -24,12 +24,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN cargo install cargo-about --version 0.9.3 --locked --features cli \
     && cargo about --version
 WORKDIR /build/lotel
-# Extension blobs land before the full source copy: this layer (≈70 MB of
+# Extension blobs and DuckDB's static libraries land before the full source copy: this layer (≈100 MB of
 # downloads) re-runs only when the fetch script or the lock changes, not on
 # every lotel edit. COPY . later cannot clobber them: crates/lotel/extensions/
 # is not in the context (see .dockerignore).
 COPY scripts/fetch-extensions.sh scripts/fetch-extensions.sh
 COPY crates/lotel/extensions.lock crates/lotel/extensions.lock
+COPY crates/lotel/duckdb.lock crates/lotel/duckdb.lock
 RUN ./scripts/fetch-extensions.sh
 COPY . ./
 # Stub gate: a zero-byte blob would build

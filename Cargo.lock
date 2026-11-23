@@ -1230,13 +1230,10 @@ checksum = "0140448c472968ee5cf5ba697435deebe558b366ef1e5c080d24d9696b600725"
 dependencies = [
  "cc",
  "flate2",
- "pkg-config",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tar",
- "ureq",
- "vcpkg",
 ]
 
 [[package]]
@@ -1289,9 +1286,11 @@ dependencies = [
  "chrono",
  "duckdb",
  "flate2",
+ "libduckdb-sys",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tar",
  "tokio",
  "topcoat",
 ]
@@ -1441,12 +1440,6 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
-
-[[package]]
-name = "pkg-config"
-version = "0.3.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "polyval"
@@ -2743,12 +2736,6 @@ name = "utf_types"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
-
-[[package]]
-name = "vcpkg"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"

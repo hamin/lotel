@@ -46,7 +46,13 @@ To build from source with cargo:
 cargo install lotel
 ```
 
-This compiles DuckDB, so it takes several minutes and needs a C++ compiler. The build downloads the pinned DuckDB extensions with `curl` and checks each one's sha256 before building them in.
+The build downloads DuckDB's prebuilt static libraries and the pinned DuckDB extensions with `curl`, checks each one's sha256, and links them in, so it takes a couple of minutes and needs no C++ compiler.
+
+On a platform without prebuilt libraries, compile DuckDB from source instead. That takes 10 minutes or more and needs a C++ compiler:
+
+```sh
+cargo install lotel --features bundled-duckdb
+```
 
 ## Docker
 

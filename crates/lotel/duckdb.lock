@@ -1,0 +1,16 @@
+# duckdb.lock: DuckDB's own prebuilt static libraries, one archive per
+# platform, linked into the binary instead of compiling DuckDB from source.
+# build.rs downloads the row for the target platform and checks its sha256;
+# `just fetch-extensions` keeps an unpacked copy in crates/lotel/duckdb/ so a
+# `cargo clean` does not mean downloading it again. Build with
+# `--features bundled-duckdb` to compile DuckDB from source instead.
+#
+# The version must match the duckdb crate pin in Cargo.toml (1.20000.x is
+# DuckDB 2.0.0) and the duckdb_version in extensions.lock.
+#
+# Format: <platform> <sha256-of-the-tar.gz> <url>
+
+osx_arm64   c3a571e6d4a0da97534c631df463ab13c07f8cf78049625f5df936b7beaab9ce https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-static-libs-osx-arm64.tar.gz
+osx_amd64   7e6101ddc8de73e8dcc66f790e658e07891165d026992b40ceba20e50b01f8ec https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-static-libs-osx-amd64.tar.gz
+linux_arm64 8171b4842e68a85b2e82b342d3bf7b542a88fd6666e0c18438d7b459012494ee https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-static-libs-linux-arm64.tar.gz
+linux_amd64 112d62c980f5447cd303a70b3dacbc09acd41ccb4ef6d154e8629f543a0f8568 https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-static-libs-linux-amd64.tar.gz

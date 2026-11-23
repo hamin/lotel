@@ -67,6 +67,7 @@ impl Clone for Db {
 impl Db {
     /// Open (creating if needed) the embedded database and attach the store.
     pub fn open(cfg: &Config) -> anyhow::Result<Self> {
+        crate::duckdb_link::register_linked_extensions()?;
         fs::create_dir_all(&cfg.data_dir)?;
         let ext_dir = Self::materialize_extensions(cfg)?;
 

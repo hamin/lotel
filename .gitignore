@@ -4,3 +4,4 @@ lotel-data/
 crates/lotel/extensions/
 .crimson/
 
+crates/lotel/duckdb/

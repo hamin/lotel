@@ -11,7 +11,7 @@ readme = "../../README.md"
 keywords = ["opentelemetry", "otlp", "observability", "duckdb", "claude-code"]
 categories = ["development-tools", "command-line-utilities"]
 # Extension blobs are fetched by build.rs from extensions.lock, never packaged.
-exclude = ["extensions/"]
+exclude = ["extensions/", "duckdb/"]
 
 # `cargo binstall lotel` downloads the release tarball instead of compiling.
 [package.metadata.binstall]
@@ -30,12 +30,21 @@ pkg-url = "{ repo }/releases/download/v{ version }/lotel-{ version }-linux-x86_6
 [package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
 pkg-url = "{ repo }/releases/download/v{ version }/lotel-{ version }-linux-aarch64.tar.gz"
 
+[features]
+# Compile DuckDB from source (10+ minutes) instead of linking its prebuilt
+# static libraries: for platforms duckdb.lock does not cover, or to debug DuckDB.
+bundled-duckdb = ["duckdb/bundled", "duckdb/json", "duckdb/parquet"]
+
 [dependencies]
 topcoat = { version = "0.12", features = ["tailwind"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # Exact pin: the crate tracks DuckDB releases (1.20000.x = DuckDB 2.0.0); the
-# bundled extension is built against 2.0.0 and the ABI must match.
-duckdb = { version = "=1.20000.1", features = ["bundled", "parquet", "json", "r2d2", "chrono"] }
+# embedded extensions are built against 2.0.0 and the ABI must match.
+# DuckDB is linked from its prebuilt static libraries (duckdb.lock, build.rs)
+# unless `bundled-duckdb` compiles it from source. Default features are off so
+# nothing probes pkg-config or downloads a shared libduckdb.
+duckdb = { version = "=1.20000.1", default-features = false, features = ["r2d2", "chrono"] }
+libduckdb-sys = { version = "=1.20000.1", default-features = false, features = ["capi-v1"] }
 anyhow = "1"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -44,3 +53,4 @@ serde_json = "1"
 [build-dependencies]
 sha2 = "0.10"
 flate2 = "1"
+tar = "0.4"

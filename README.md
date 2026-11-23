@@ -164,7 +164,7 @@ You need Rust and [just](https://github.com/casey/just).
 
 | Command | What it does |
 | --- | --- |
-| `just fetch-extensions` | Downloads the pinned `capped`, `otlp` and `fts` extensions |
+| `just fetch-extensions` | Downloads the pinned extensions and DuckDB's prebuilt libraries |
 | `cargo build --release` | Builds `target/release/lotel` |
 | `cargo test` | Unit and database tests |
 | `just smoke` | Boots the binary, ingests `testdata/`, checks every page |
@@ -176,6 +176,12 @@ builds listed in `crates/lotel/extensions.lock` and checks each one's sha256. `c
 comes from its [GitHub release](https://github.com/hamin/duckdb-capped/releases);
 set `CAPPED_EXT=/path/to/capped.duckdb_extension` to use a local build. All three are then
 `include_bytes!`-embedded, so the shipped binary needs nothing at runtime.
+
+DuckDB itself is linked from its official prebuilt static libraries, pinned
+with their sha256 in `crates/lotel/duckdb.lock`, so a clean build takes a
+couple of minutes instead of compiling DuckDB's C++. `just fetch-extensions`
+unpacks them into `crates/lotel/duckdb/`, so they survive a `cargo clean`.
+To compile DuckDB from source instead, build with `--features bundled-duckdb`.
 `just dist` refuses to run against stubbed (zero-byte) blobs and boots the
 tarball's own binary as an ingest gate, so a release can't silently ship dead.
 

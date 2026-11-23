@@ -5,6 +5,8 @@ lotel-data/
 **/node_modules/
 # host-fetched extension blobs (e.g. macOS): the image fetches its own
 crates/lotel/extensions/
+# host-unpacked DuckDB libraries (e.g. macOS): same
+crates/lotel/duckdb/
 # local-only files
 local.just
 .hallmark/

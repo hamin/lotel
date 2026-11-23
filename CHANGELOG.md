@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Build
+
+- DuckDB is linked from its official prebuilt static libraries
+  (`crates/lotel/duckdb.lock`, sha256-pinned) instead of compiled from
+  source, so a clean build takes a couple of minutes instead of 15 or more.
+  `--features bundled-duckdb` compiles it from source as before.
+
 ## [0.1.0] - 2026-11-22
 
 First release: one static binary that ingests OpenTelemetry over HTTP into a
